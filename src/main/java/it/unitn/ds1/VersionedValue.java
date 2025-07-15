@@ -24,4 +24,9 @@ public class VersionedValue {
     public void setVersion(int version) {
         this.version = version;
     }
+
+    @Override
+    public String toString() {
+        return value + " (v" + version + ")";
+    }
 }

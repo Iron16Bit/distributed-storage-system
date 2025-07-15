@@ -1,13 +1,16 @@
 package it.unitn.ds1;
 
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
 import akka.actor.ActorRef;
 import akka.actor.Props;
+import scala.Array;
 import akka.actor.AbstractActor;
 
 /* 
@@ -27,8 +30,8 @@ interface DataService {
 
 public class Node extends AbstractActor implements DataService {
     
-    private final Integer ID;
-    private ActorRef nextNode;
+    private final Integer id;
+    private ActorRef nextNode = null;
     private boolean isAlive = true;
     private boolean isCrashed = false;
 
@@ -82,25 +85,25 @@ public class Node extends AbstractActor implements DataService {
         }
         
     }
-    public static class GetValueResponse implements Serializable {
+    public static class GetValueResponseMsg implements Serializable {
         final int key;
         final VersionedValue value;
     
-        public GetValueResponse(int key, VersionedValue value) {
+        public GetValueResponseMsg(int key, VersionedValue value) {
             this.key = key;
             this.value = value;
         }
     }
 
     //--Constructor--
-    public Node(int ID) {
-        this.ID = ID;
-        this.nodesAlive.add(ID);
+    public Node(int id) {
+        this.id = id;
+        this.nodesAlive.add(id);
     }
 
     //--Getters and Setters--
     public Integer getID() {
-        return ID;
+        return id;
     }
 
     public ActorRef getNextNode() {
@@ -127,10 +130,49 @@ public class Node extends AbstractActor implements DataService {
         this.nodesAlive = nodesAlive;
     }
 
-    //--DataService--
+    private List<Integer> getNextNNodes(int key) {
+        List<Integer> result = new ArrayList<>();
+        
+        if(key < 0) {
+            return result;
+        }
+
+        if(this.nodesAlive.size() == 1) {
+            result.add(this.nodesAlive.first());
+            return result;
+        }
+
+        List<Integer> nodesAliveList = new ArrayList<>();
+        
+        int startIndex = -1;
+        for (int i = 0; i < nodesAliveList.size(); i++) {
+            if (nodesAliveList.get(i) > key) {
+                startIndex = i;
+                break;
+            }
+        }
+
+        startIndex = startIndex == -1 ? 0 : startIndex;
+
+        for (int i = startIndex; i < DataStoreManager.REPLICATION_FACTOR; i++) {
+            int index = (startIndex + i) % nodesAliveList.size();
+            result.add(nodesAliveList.get(index));
+        }
+
+        return result;
+    }
+
+    //--Data Service--
     @Override
     public void update(int key, String value) {
         //TODO implement in case the data is in another node
+
+
+        //how to understand which node posesses which values
+        // List<Integer> nodeList = getNextNNodes(key);
+        
+
+        //case that it's found in my node
         VersionedValue versionedValue = get(key);
         if (versionedValue == null) {
             // Create new versioned value if it doesn't exist
@@ -151,10 +193,25 @@ public class Node extends AbstractActor implements DataService {
     //--Actions on Messages--
     private void onJoin(JoinMsg msg) {
         //TODO implement
+        if (msg.bootstrappingPeer != null) {
+            //TODO make it send the request for available nodes
+        }
 
+        //This means that the node is the first in the network.
+        this.nextNode = null;
+        System.out.println("[JOIN NODE] id: " + this.id);
     }
-    private void onLeave(LeaveMsg msg) {
+
+    private void onAskAvailableNodes(AskAvailableNodes msg) {
         //TODO implement
+    }
+
+    private void onBootstrappingResponse(BootStrappingResponse msg) {
+        //TODO implement
+    }
+
+    private void onLeave(LeaveMsg msg) {
+        //TODO implement (what to do if you are the only node left?)
     }
 
     private void onCrash(CrashMsg msg) {
@@ -167,18 +224,22 @@ public class Node extends AbstractActor implements DataService {
 
     private void onUpdateValue(UpdateValueMsg msg) {
         //TODO implement
+        System.out.println("[UPDATE ITEM] Key: " + msg.key +", Value: " + msg.value);
         update(msg.key,msg.value);
-
     }
 
     private void onGetValue (GetValueMsg msg) {
         //TODO implement
-        get(msg.key);
+        System.out.println("[REQUESTED VALUE] Key: " + msg.key);
+        VersionedValue requestedValue = get(msg.key);
+
+        GetValueResponseMsg response = new GetValueResponseMsg(msg.key, requestedValue);
+        sender().tell(response, self());
     }
     
     //--akka--
-    static public Props props(int ID) {
-        return Props.create(Node.class, () -> new Node(ID));
+    static public Props props(int id) {
+        return Props.create(Node.class, () -> new Node(id));
     }
 
     @Override
@@ -186,6 +247,8 @@ public class Node extends AbstractActor implements DataService {
         //TODO check if something missing
         return receiveBuilder()
             .match(JoinMsg.class, this::onJoin)
+            .match(AskAvailableNodes.class, this::onAskAvailableNodes)
+            .match(BootStrappingResponse.class, this::onBootstrappingResponse)
             .match(LeaveMsg.class, this::onLeave)
             .match(CrashMsg.class, this::onCrash)
             .match(RecoveryMsg.class, this::onRecovery)
