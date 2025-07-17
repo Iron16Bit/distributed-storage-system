@@ -1,4 +1,4 @@
-package it.unitn.ds1;
+package it.unitn.ds1.utils;
 
 public class VersionedValue {
     private String value;

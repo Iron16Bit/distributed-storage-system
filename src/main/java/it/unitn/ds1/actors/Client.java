@@ -1,4 +1,4 @@
-package it.unitn.ds1;
+package it.unitn.ds1.actors;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -6,7 +6,8 @@ import java.util.Map;
 import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
 import akka.actor.Props;
-import it.unitn.ds1.Node.GetValueResponseMsg;
+import it.unitn.ds1.Messages;
+import it.unitn.ds1.utils.VersionedValue;
 
 
 
@@ -34,7 +35,7 @@ public class Client extends AbstractActor {
     }
 
     //--Messages--
-    public void onGetValueResponseMsg(GetValueResponseMsg msg) {
+    public void onGetValueResponseMsg(Messages.GetValueResponseMsg msg) {
         //Check if the response is null -> no item found or other possible errors.
         if (msg.value == null) {
             System.out.println("[REJECT]  Item (key " + msg.key + ") cannot be found ");
@@ -67,7 +68,7 @@ public class Client extends AbstractActor {
     public Receive createReceive() {
         //TODO check if something missing
         return receiveBuilder()
-            .match(GetValueResponseMsg.class, this::onGetValueResponseMsg)
+            .match(Messages.GetValueResponseMsg.class, this::onGetValueResponseMsg)
             .build();
     }  
 
