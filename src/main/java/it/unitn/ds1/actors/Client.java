@@ -35,7 +35,7 @@ public class Client extends AbstractActor {
     }
 
     //--Messages--
-    public void onGetValueResponseMsg(Messages.GetValueResponseMsg msg) {
+    public void onGetResponse(Messages.GetResponse msg) {
         //Check if the response is null -> no item found or other possible errors.
         if (msg.value == null) {
             System.out.println("[REJECT]  Item (key " + msg.key + ") cannot be found ");
@@ -60,6 +60,30 @@ public class Client extends AbstractActor {
         dataStore.put(msg.key, msg.value);
     }
 
+    public void onUpdateResponse(Messages.UpdateResponse msg) {
+        if (msg.versionedValue == null) {
+            System.out.println("[REJECT]  Item (key " + msg.key + ") possible WTF moment ");
+            return;
+        }
+
+        VersionedValue localValue = this.dataStore.get(msg.key);
+        // If clienmt doesn't currenlty have the item, accept the reponse
+        if (localValue == null) {
+            System.out.println("[ACCEPT] Updated Item: Key->" + msg.key + ", Versioned Value->" + msg.versionedValue);
+            dataStore.put(msg.key, msg.versionedValue);
+            return;
+        }
+
+        // If client has a newer version, reject the response
+        if (localValue.getVersion() > msg.versionedValue.getVersion()) {
+            System.out.println("[REJECT] Item (key " + msg.key + ") write inconsistent (older than actual value)");
+            return;
+        }
+        System.out.println("[ACCEPT] Updated Item: Key->" + msg.key + ",Versioned Value->" + msg.versionedValue);
+        dataStore.put(msg.key, msg.versionedValue);
+
+    }
+
     static public Props props(ActorRef coordinator) {
         return Props.create(Client.class, () -> new Client(coordinator));
     }
@@ -68,7 +92,8 @@ public class Client extends AbstractActor {
     public Receive createReceive() {
         //TODO check if something missing
         return receiveBuilder()
-            .match(Messages.GetValueResponseMsg.class, this::onGetValueResponseMsg)
+            .match(Messages.GetResponse.class, this::onGetResponse)
+            .match(Messages.UpdateResponse.class, this::onUpdateResponse)
             .build();
     }  
 
