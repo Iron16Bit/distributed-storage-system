@@ -3,7 +3,6 @@ package it.unitn.ds1;
 import java.io.Serializable;
 import java.util.Map;
 import java.util.SortedMap;
-import java.util.TreeMap;
 
 import akka.actor.ActorRef;
 import it.unitn.ds1.types.GetType;

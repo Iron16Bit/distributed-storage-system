@@ -59,7 +59,7 @@ public class Main {
             // Store a value (client sends UpdateValueMsg to node)
             System.out.println("=== Operation 1: Store key=1, value=Alluminium ===");
             node1.tell(new Messages.ClientUpdate(1, "Alluminium"), client);
-            // Thread.sleep(1000); // 1 second delay
+            Thread.sleep(1000); // 1 second delay
 
             System.out.println("\n");
             
@@ -73,7 +73,7 @@ public class Main {
             // Store another value
             System.out.println("=== Operation 3: Store key=6, value=Gold ===");
             node1.tell(new Messages.ClientUpdate(6, "Gold"), client);
-            // Thread.sleep(1000); // 1 second delay
+            Thread.sleep(1000); // 1 second delay
 
             System.out.println("\n");
             
@@ -94,7 +94,7 @@ public class Main {
             // Try to update a local value
             System.out.println("=== Operation 6: Update key=1 value=Silver ===");
             node1.tell(new Messages.ClientUpdate(1, "Silver"), client);
-            // Thread.sleep(1000); // 1 second delay
+            Thread.sleep(1000); // 1 second delay
 
             System.out.println("\n");
 
@@ -107,21 +107,21 @@ public class Main {
             // Try to update a remote value
             System.out.println("=== Operation 7: Update key=6 value=Sapphire ===");
             node1.tell(new Messages.ClientUpdate(6, "Sapphire"), client);
-            // Thread.sleep(1000); // 1 second delay
+            Thread.sleep(1000); // 1 second delay
 
             System.out.println("\n");
 
             // Try to update a remote value
             System.out.println("=== Operation 8: Update key=9 value=Diamond ===");
             node1.tell(new Messages.ClientUpdate(9, "Diamond"), client);
-            // Thread.sleep(1000); // 1 second delay
+            Thread.sleep(1000); // 1 second delay
 
             System.out.println("\n");
 
             // Try to update a remote value
             System.out.println("=== Operation 9: Update key=9 value=Diamonds ===");
             node1.tell(new Messages.ClientUpdate(9, "Diamonds"), client);
-            // Thread.sleep(1000); // 1 second delay
+            Thread.sleep(1000); // 1 second delay
 
             System.out.println("\n");
 
@@ -130,11 +130,13 @@ public class Main {
             node1.tell(new Messages.ClientGet(9), client);
             Thread.sleep(1000); // 1 second delay
 
-
+            System.out.println("\n");
 
             System.out.println("=== Operation 11: Join Node 7 ===");
             node7.tell(new Messages.Join(node1), nodeSystem);
             Thread.sleep(5000);
+
+            System.out.println("\n");
 
             System.out.println("=== Operation 12: Update key=6 value=Emeralds ===");
             node1.tell(new Messages.ClientUpdate(6, "Emeralds"), client);
