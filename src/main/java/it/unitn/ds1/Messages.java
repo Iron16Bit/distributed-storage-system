@@ -1,41 +1,40 @@
 package it.unitn.ds1;
 
 import java.io.Serializable;
+import java.util.Map;
+import java.util.SortedMap;
 import java.util.TreeMap;
 
 import akka.actor.ActorRef;
+import it.unitn.ds1.types.GetType;
 import it.unitn.ds1.utils.VersionedValue;
 
 public class Messages {
 
     //--Messages--
-    public static class JoinMsg implements Serializable {
+    public static class Join implements Serializable {
         public final ActorRef bootstrappingPeer;
     
-        public JoinMsg(ActorRef bootstrappingPeer) {
+        public Join(ActorRef bootstrappingPeer) {
             this.bootstrappingPeer = bootstrappingPeer;
         }
     
     }
 
-    public static class AskAvailableNodes implements Serializable{}
-
-    public static class BootStrappingResponse implements Serializable{
-        final TreeMap<Integer, ActorRef> nodeRegistry;
+    public static class RequestDataItems implements Serializable{
+        public final int askingID;
     
-        public BootStrappingResponse( TreeMap<Integer,ActorRef> nodeRegistry) {
-            this.nodeRegistry = nodeRegistry;
-        }
-    
-    }
-
-    public static class AskDataItems implements Serializable{
-        final int askingID;
-    
-        public AskDataItems(int askingID) {
+        public RequestDataItems(int askingID) {
             this.askingID = askingID;
         }
-    
+    }
+
+    public static class DataItemsResponse implements Serializable {
+        public final Map<Integer, VersionedValue> dataItems;
+        
+        public DataItemsResponse(Map<Integer, VersionedValue> dataItems) {
+            this.dataItems = dataItems;
+        }
     }
 
     public static class LeaveMsg implements Serializable {}
@@ -104,10 +103,12 @@ public class Messages {
     public static class ReplicaGet implements Serializable {
         public final int key;
         public final String operationId;
+        public final GetType getType;
 
-        public ReplicaGet(int key, String operationId) {
+        public ReplicaGet(int key, String operationId, GetType getType) {
             this.key = key;
             this.operationId = operationId;
+            this.getType = getType;
         }
     }
 
@@ -123,13 +124,26 @@ public class Messages {
         }
     }
 
+    public static class RequestNodeRegistry implements Serializable {}
+
+    public static class Announce implements Serializable {
+        public final int announcingId;
+
+        public Announce(int announcingId) {
+            this.announcingId = announcingId;
+        }
+
+    }
+
 
     // Add this to your Messages class
     public static class UpdateNodeRegistry implements Serializable {
-        public final TreeMap<Integer, ActorRef> nodeRegistry;
+        public final SortedMap<Integer, ActorRef> nodeRegistry;
+        public final boolean isInit;
         
-        public UpdateNodeRegistry(TreeMap<Integer, ActorRef> nodeRegistry) {
+        public UpdateNodeRegistry(SortedMap<Integer, ActorRef> nodeRegistry, boolean isInit) {
             this.nodeRegistry = nodeRegistry;
+            this.isInit = isInit;
         }
     }
     
