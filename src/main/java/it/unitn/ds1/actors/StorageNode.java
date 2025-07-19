@@ -378,37 +378,23 @@ public class StorageNode extends AbstractActor implements DataService {
     
     
     private void onReplicaGet(Messages.ReplicaGet msg) {
+        // Determine the appropriate lock type
+        OpType lockType = (msg.getType == GetType.UPDATE) ? OpType.UPDATE : OpType.GET;
+        
+        if (!acquireLock(msg.key, lockType, msg.operationId)) {
+            System.err.println("[NODE " + this.id + "] Cannot execute get on data " + msg.key + " is locked");
+            return;
+        }
+
+        VersionedValue requestedValue = this.dataStore.get(msg.key);
+        sender().tell(new Messages.GetResponse(msg.key, requestedValue, msg.operationId), getSelf());
+        
+        // For regular GET and INIT operations, release lock immediately
+        // For UPDATE operations (read-before-update), keep the lock until update completes
         if (msg.getType == GetType.GET || msg.getType == GetType.INIT) {
-
-            if (!acquireLock(msg.key, OpType.GET, msg.operationId)) {
-                //maybe send message back
-                System.err.println("[NODE" + this.id + "] Cannot execute get on data " + msg.key + " is locked");
-                return;
-            }
-            
-
-            VersionedValue requestedValue = this.dataStore.get(msg.key);
-            sender().tell(new Messages.GetResponse(msg.key, requestedValue, msg.operationId), getSelf());
-            // System.out.println("[NODE " + this.id + "] Datastore" + this.dataStore);
-
-            // Release lock after sending response
-            releaseLock(msg.key, msg.operationId);
-
-        } else {
-            if (!acquireLock(msg.key, OpType.UPDATE, msg.operationId)) {
-                //maybe send message back
-                System.err.println("[NODE" + this.id + "] Cannot execute get on data " + msg.key + " is locked");
-                return;
-            }
-            
-
-            VersionedValue requestedValue = this.dataStore.get(msg.key);
-            sender().tell(new Messages.GetResponse(msg.key, requestedValue, msg.operationId), getSelf());
-            // System.out.println("[NODE " + this.id + "] Datastore" + this.dataStore);
-
-            // Release lock after sending response
             releaseLock(msg.key, msg.operationId);
         }
+        // Note: For UPDATE operations, the lock will be released in onReplicaUpdate
     }
 
     private void onGetResponse(Messages.GetResponse msg) {
