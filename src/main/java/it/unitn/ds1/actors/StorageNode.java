@@ -24,15 +24,6 @@ import it.unitn.ds1.types.OpType;
 import it.unitn.ds1.types.UpdateType;
 import it.unitn.ds1.utils.VersionedValue;
 
-/* 
- * Action to be implemented:
- * Announcing to whole system:
- *  - Join: get value + message in broadcast
- *  - Quit: message in broadcast + drop values to all other nodes
- * Handle crash state (receiving of message) + Recovery
- * Hanlde request for read and write (quorum)
- */
-
 interface DataService {
   VersionedValue updateWithCurrentValue(int key, String value, VersionedValue currentValue);
   VersionedValue get(int key);
@@ -42,8 +33,6 @@ public class StorageNode extends AbstractActor implements DataService {
     
     private final Integer id;
     private final Random random;
-    private boolean isAlive = true;
-    private boolean isCrashed = false;
 
     private Map<Integer,VersionedValue> dataStore = new HashMap<>();
     private SortedMap<Integer, ActorRef> nodeRegistry = new TreeMap<>();

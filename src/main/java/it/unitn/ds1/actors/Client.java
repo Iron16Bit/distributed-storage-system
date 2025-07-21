@@ -4,7 +4,6 @@ import java.util.HashMap;
 import java.util.Map;
 
 import akka.actor.AbstractActor;
-import akka.actor.ActorRef;
 import akka.actor.Props;
 import it.unitn.ds1.Messages;
 import it.unitn.ds1.utils.VersionedValue;
