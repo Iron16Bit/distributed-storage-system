@@ -10,6 +10,9 @@ import it.unitn.ds1.utils.VersionedValue;
 
 public class Messages {
 
+    // Debug message to print the contents of a node's data store
+    public static class DebugPrintDataStore implements Serializable {}
+
     //--Messages--
     public static class Join implements Serializable {
         public final ActorRef bootstrappingPeer;

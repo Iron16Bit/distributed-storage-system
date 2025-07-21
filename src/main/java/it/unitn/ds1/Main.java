@@ -8,6 +8,19 @@ import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.StorageNode;
 
 public class Main {
+    
+    // Helper method to print node contents
+    private static void printNodeContents(TreeMap<Integer, ActorRef> nodeRegistry) {
+        System.out.println("=== NODE CONTENTS ===");
+        for (Integer nodeId : nodeRegistry.keySet()) {
+            ActorRef node = nodeRegistry.get(nodeId);
+            // Send a debug message to get node contents
+            node.tell(new Messages.DebugPrintDataStore(), ActorRef.noSender());
+        }
+        System.out.println("=====================");
+        try { Thread.sleep(500); } catch (InterruptedException e) { }
+    }
+    
     public static void main(String[] args) {
         final ActorSystem system = ActorSystem.create("Distributed-Storage-System");
         
@@ -60,6 +73,7 @@ public class Main {
             System.out.println("=== Operation 1: Store key=1, value=Alluminium ===");
             node1.tell(new Messages.ClientUpdate(1, "Alluminium"), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
             
@@ -67,6 +81,7 @@ public class Main {
             System.out.println("=== Operation 2: Get key=1 ===");
             node1.tell(new Messages.ClientGet(1), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
             
@@ -74,6 +89,7 @@ public class Main {
             System.out.println("=== Operation 3: Store key=6, value=Gold ===");
             node1.tell(new Messages.ClientUpdate(6, "Gold"), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
             
@@ -81,6 +97,7 @@ public class Main {
             System.out.println("=== Operation 4: Get key=6 ===");
             node1.tell(new Messages.ClientGet(6), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
             
@@ -88,6 +105,7 @@ public class Main {
             System.out.println("=== Operation 5: Get key=200 (non-existent) ===");
             node1.tell(new Messages.ClientGet(200), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
 
@@ -95,12 +113,14 @@ public class Main {
             System.out.println("=== Operation 6: Update key=1 value=Silver ===");
             node1.tell(new Messages.ClientUpdate(1, "Silver"), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
 
             System.out.println("=== Operation 6.5: Update key=1 value=LOL ===");
             node1.tell(new Messages.ClientUpdate(1, "LOL"), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
 
@@ -108,6 +128,7 @@ public class Main {
             System.out.println("=== Operation 7: Update key=6 value=Sapphire ===");
             node1.tell(new Messages.ClientUpdate(6, "Sapphire"), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
 
@@ -115,6 +136,7 @@ public class Main {
             System.out.println("=== Operation 8: Update key=9 value=Diamond ===");
             node1.tell(new Messages.ClientUpdate(9, "Diamond"), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
 
@@ -122,6 +144,7 @@ public class Main {
             System.out.println("=== Operation 9: Update key=9 value=Diamonds ===");
             node1.tell(new Messages.ClientUpdate(9, "Diamonds"), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
 
@@ -129,18 +152,23 @@ public class Main {
             System.out.println("=== Operation 10: Get key=9 ===");
             node1.tell(new Messages.ClientGet(9), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
 
             System.out.println("=== Operation 11: Join Node 7 ===");
             node7.tell(new Messages.Join(node1), nodeSystem);
             Thread.sleep(5000);
+            // Update registry to include node7 for printing
+            testNodeRegistry.put(7, node7);
+            printNodeContents(testNodeRegistry);
 
             System.out.println("\n");
 
             System.out.println("=== Operation 12: Update key=6 value=Emeralds ===");
             node1.tell(new Messages.ClientUpdate(6, "Emeralds"), client);
             Thread.sleep(1000); // 1 second delay
+            printNodeContents(testNodeRegistry);
 
             
             System.out.println("=== All operations completed ===");

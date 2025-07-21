@@ -331,6 +331,11 @@ public class StorageNode extends AbstractActor implements DataService {
 
     }
 
+    // Debug message to print the contents of a node's data store
+    private void onDebugPrintDataStore(Messages.DebugPrintDataStore msg) {
+        System.out.println("[NODE " + this.id + "] DataStore: " + this.dataStore);
+    }
+
     private void onLeave(Messages.LeaveMsg msg) {
         //TODO implement (what to do if you are the only node left?)
     }
@@ -654,6 +659,7 @@ public class StorageNode extends AbstractActor implements DataService {
             .match(Messages.ClientGet.class, this::onClientGet)
             .match(Messages.ReplicaGet.class, this::onReplicaGet)
             .match(Messages.GetResponse.class, this::onGetResponse)
+            .match(Messages.DebugPrintDataStore.class, this::onDebugPrintDataStore) // For debugging
             .build();
     }    
 }
