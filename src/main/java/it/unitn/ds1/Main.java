@@ -6,6 +6,7 @@ import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
 import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.StorageNode;
+import it.unitn.ds1.types.UpdateType;
 
 public class Main {
     
@@ -56,15 +57,15 @@ public class Main {
         testNodeRegistry.put(10, node10);
 
         // Send the registry to both nodes
-        node1.tell(new Messages.UpdateNodeRegistry(testNodeRegistry, true), ActorRef.noSender());
-        node5.tell(new Messages.UpdateNodeRegistry(testNodeRegistry, true), ActorRef.noSender());
-        node10.tell(new Messages.UpdateNodeRegistry(testNodeRegistry, true), ActorRef.noSender());
+        node1.tell(new Messages.UpdateNodeRegistry(testNodeRegistry, UpdateType.INIT), ActorRef.noSender());
+        node5.tell(new Messages.UpdateNodeRegistry(testNodeRegistry, UpdateType.INIT), ActorRef.noSender());
+        node10.tell(new Messages.UpdateNodeRegistry(testNodeRegistry, UpdateType.INIT), ActorRef.noSender());
 
         // Small delay to ensure registry updates are processed
         try { Thread.sleep(100); } catch (InterruptedException e) { }
 
         final ActorRef client = system.actorOf(
-            Client.props(node1),
+            Client.props(),
             "client-1"
         );
 
@@ -170,7 +171,55 @@ public class Main {
             Thread.sleep(1000); // 1 second delay
             printNodeContents(testNodeRegistry);
 
-            
+            System.out.println("\n");
+
+            // Just for testing, need to change coordinator on Client
+            System.out.println("=== Operation 13: Node 7 crashes ===");
+            node7.tell(new Messages.Crash(), nodeSystem);
+            Thread.sleep(1000);
+            printNodeContents(testNodeRegistry);
+
+            System.out.println("\n");
+
+            // Just for testing, need to change coordinator on Client
+            System.out.println("=== Operation 14: Node 1 leaves ===");
+            node1.tell(new Messages.Leave(), nodeSystem);
+            Thread.sleep(1000);
+            testNodeRegistry.remove(1);
+            printNodeContents(testNodeRegistry);
+
+            System.out.println("\n");
+
+            // Just for testing, need to change coordinator on Client
+            System.out.println("=== Operation 15: Node 7 Recovers ===");
+            node7.tell(new Messages.Recovery(node10), nodeSystem);
+            Thread.sleep(5000);
+            printNodeContents(testNodeRegistry);
+
+            System.out.println("\n");
+
+            System.out.println("=== Operation 16: Node 7 crashes ===");
+            node7.tell(new Messages.Crash(), nodeSystem);
+            Thread.sleep(1000);
+            printNodeContents(testNodeRegistry);
+
+
+            // Just for testing, need to change coordinator on Client
+            System.out.println("=== Operation 17: Node 1 Joins ===");
+            node1.tell(new Messages.Join(node10), nodeSystem);
+            Thread.sleep(1000);
+            testNodeRegistry.put(1,node1);
+            printNodeContents(testNodeRegistry);
+
+            System.out.println("\n");
+
+
+            System.out.println("=== Operation 18: Node 7 Recovers ===");
+            node7.tell(new Messages.Recovery(node10), nodeSystem);
+            Thread.sleep(5000);
+            printNodeContents(testNodeRegistry);
+
+            System.out.println("\n");
             System.out.println("=== All operations completed ===");
             
         } catch (InterruptedException e) {

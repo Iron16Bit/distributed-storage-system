@@ -17,11 +17,11 @@ import java.util.stream.Collectors;
 import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
 import akka.actor.Props;
-import akka.util.Timeout;
 import it.unitn.ds1.DataStoreManager;
 import it.unitn.ds1.Messages;
 import it.unitn.ds1.types.GetType;
 import it.unitn.ds1.types.OpType;
+import it.unitn.ds1.types.UpdateType;
 import it.unitn.ds1.utils.VersionedValue;
 
 /* 
@@ -254,7 +254,7 @@ public class StorageNode extends AbstractActor implements DataService {
         getContext().system().scheduler().scheduleOnce(
             Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
             msg.bootstrappingPeer,
-            new Messages.RequestNodeRegistry(), // the message to send
+            new Messages.RequestNodeRegistry(UpdateType.JOIN), // the message to send
             getContext().system().dispatcher(), 
             getSelf()
         );
@@ -266,7 +266,7 @@ public class StorageNode extends AbstractActor implements DataService {
         getContext().system().scheduler().scheduleOnce(
             Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
             sender(),
-            new Messages.UpdateNodeRegistry(this.nodeRegistry, false), // the message to send
+            new Messages.UpdateNodeRegistry(this.nodeRegistry, msg.type), // the message to send
             getContext().system().dispatcher(), 
             getSelf()
         );
@@ -275,58 +275,76 @@ public class StorageNode extends AbstractActor implements DataService {
     private void onRequestDataItems(Messages.RequestDataItems msg) {
         
         // Filter requested Data items for the joining Storage Node
-        Map<Integer, VersionedValue> requestedDataItems = this.dataStore.entrySet().stream()
-            .filter(entry -> entry.getKey() <= msg.askingID)
-            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        Map<Integer, VersionedValue> requestedDataItems;
+        
+        if (msg.type == UpdateType.JOIN) {
+            requestedDataItems = this.dataStore.entrySet().stream()
+                .filter(entry -> entry.getKey() <= msg.askingID)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        } else {
+            requestedDataItems = new HashMap<>(this.dataStore);
+        }
 
         int randomTimeout = 50 + random.nextInt(450);
         getContext().system().scheduler().scheduleOnce(
             Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
             sender(),
-            new Messages.DataItemsResponse(requestedDataItems), // the message to send
+            new Messages.DataItemsResponse(requestedDataItems, msg.type), // the message to send
             getContext().system().dispatcher(), 
             getSelf()
         );
     }
 
     private void onDataItemsReponse(Messages.DataItemsResponse msg) {
+
         for (Integer key: msg.dataItems.keySet()) {
             
-            String operationId = this.id + "-" + key + "-" + (++this.operationCounter);
-
-            GetOperation getOperation = new GetOperation(key, getSelf(), GetType.INIT);
-            pendingGet.put(operationId, getOperation);
             
             List<ActorRef> nNodes = getNextNNodes(key);
 
-            for (ActorRef ref: nNodes) {
-
-                int randomTimeout = 50 + random.nextInt(450);
-                getContext().system().scheduler().scheduleOnce(
-                    Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                    ref,
-                    new Messages.ReplicaGet(key, operationId, GetType.INIT), // the message to send
-                    getContext().system().dispatcher(), 
-                    getSelf()
-                );
+            if (msg.type == UpdateType.JOIN) {
+                String operationId = this.id + "-" + key + "-" + (++this.operationCounter);
+    
+                GetOperation getOperation = new GetOperation(key, getSelf(), GetType.INIT);
+                pendingGet.put(operationId, getOperation);
                 
+                for (ActorRef ref: nNodes) {
+                    int randomTimeout = 50 + random.nextInt(450);
+                    getContext().system().scheduler().scheduleOnce(
+                        Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
+                        ref,
+                        new Messages.ReplicaGet(key, operationId, GetType.INIT), // the message to send
+                        getContext().system().dispatcher(), 
+                        getSelf()
+                    );
+                }
+            } else {
+
+                // Value is added if it's now requested and not present inside the personal dataStore.
+                if (nNodes.contains(getSelf()) && !this.dataStore.containsKey(key)) {
+                    System.out.printf("[NODE %d] Due to Recovery added (Key -> %d, value -> %s)\n", this.id, key, msg.dataItems.get(key));
+                    this.dataStore.put(key, msg.dataItems.get((key)));
+                }
             }
         }
 
-        this.nodeRegistry.put(this.id, getSelf());
-        System.out.println("I have inserted my self inside the nodeRegistry: id ->" + this.id);
 
-        for (ActorRef ref: nodeRegistry.values()) {
-            if (ref != getSelf()) {
-                int randomTimeout = 50 + random.nextInt(450);
-                getContext().system().scheduler().scheduleOnce(
-                    Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                    ref,
-                    new Messages.Announce(this.id), // the message to send
-                    getContext().system().dispatcher(), 
-                    getSelf()
-                );
-            } 
+        if (msg.type == UpdateType.JOIN) {
+            this.nodeRegistry.put(this.id, getSelf());
+            System.out.println("I have inserted my self inside the nodeRegistry: id ->" + this.id);
+    
+            for (ActorRef ref: nodeRegistry.values()) {
+                if (ref != getSelf()) {
+                    int randomTimeout = 50 + random.nextInt(450);
+                    getContext().system().scheduler().scheduleOnce(
+                        Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
+                        ref,
+                        new Messages.Announce(this.id), // the message to send
+                        getContext().system().dispatcher(), 
+                        getSelf()
+                    );
+                } 
+            }
         }
 
     }
@@ -336,16 +354,65 @@ public class StorageNode extends AbstractActor implements DataService {
         System.out.println("[NODE " + this.id + "] DataStore: " + this.dataStore);
     }
 
-    private void onLeave(Messages.LeaveMsg msg) {
-        //TODO implement (what to do if you are the only node left?)
+    private void onLeave(Messages.Leave msg) {
+        // Assumption one node MUST remain alive, so this case is not covered inside the function
+
+        // Remove yourself from the registry
+        this.nodeRegistry.remove(this.id);
+
+        for (ActorRef ref: nodeRegistry.values()) {
+            int randomTimeout = 50 + random.nextInt(450);
+            getContext().system().scheduler().scheduleOnce(
+                Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
+                ref,
+                new Messages.NotifyLeave(this.id, this.dataStore), // the message to send
+                getContext().system().dispatcher(), 
+                getSelf()
+            );
+        }
+        System.out.println("[NODE" + this.id +"] Announces leave");
     }
 
-    private void onCrash(Messages.CrashMsg msg) {
-        //TODO implement
+    private void onNotifyLeave(Messages.NotifyLeave msg) {
+        
+        // Remove leaving node from the nodeRegistry
+        this.nodeRegistry.remove(msg.leavingId);
+
+        for (Integer key: msg.items.keySet()) {
+            List<ActorRef> newOwners = getNextNNodes(key);
+
+            if (newOwners.contains(getSelf())) {
+                VersionedValue givenValue =  msg.items.get(key);
+                VersionedValue posessedValue = this.dataStore.get(key);
+
+                if (posessedValue == null || posessedValue.getVersion() < givenValue.getVersion()) {
+                    this.dataStore.put(key,givenValue);
+                    System.out.println("[NODE" + this.id +"] Due to Node " + msg.leavingId 
+                        + ", Inserts (key -> " + key +", value -> " + givenValue + ")");
+                }
+            }
+        }
     }
 
-    private void onRecovery(Messages.RecoveryMsg msg) {
-        //TODO implement
+
+    private void onCrash(Messages.Crash msg) {
+        getContext().become(crashed());
+        System.out.println("[NODE " + this.id + "] CRASHED!");
+    }
+
+    private void onRecovery(Messages.Recovery msg) {
+        getContext().become(createReceive());
+
+        System.out.printf("[NODE %d] Recovering\n", this.id);
+
+        int randomTimeout = 50 + random.nextInt(450);
+        getContext().system().scheduler().scheduleOnce(
+            Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
+            msg.recoveryNode,
+            new Messages.RequestNodeRegistry(UpdateType.RECOVERY),
+            getContext().system().dispatcher(), 
+            getSelf()
+        );
     }
 
     private void onClientUpdate(Messages.ClientUpdate msg) {
@@ -593,28 +660,74 @@ public class StorageNode extends AbstractActor implements DataService {
 
     //TODO for testing
     private void onUpdateNodeRegistry(Messages.UpdateNodeRegistry msg) {
+        
         this.nodeRegistry.clear();
         this.nodeRegistry.putAll(msg.nodeRegistry);
-        // Keep self in registry
-        if(msg.isInit) {
-            this.nodeRegistry.put(this.id, getSelf());
-        } else {
-            SortedMap<Integer, ActorRef> higherNodes = this.nodeRegistry.tailMap(this.id);
-            ActorRef neighbor;
-            if (higherNodes.isEmpty()) {
-                neighbor = this.nodeRegistry.firstEntry().getValue();
-            } else {
-                neighbor = higherNodes.firstEntry().getValue();
+
+        switch(msg.type) {
+            case INIT -> this.nodeRegistry.put(this.id, getSelf());
+            case RECOVERY -> {
+                // stritctly less than key, meaning this node is not included
+                SortedMap<Integer, ActorRef> lowerNodes = this.nodeRegistry.headMap(this.id);
+                
+                // Getting the previous (left) neighbor of the recovering node
+                // TODO if contacting node is crashed choose another one
+                ActorRef neighbor;
+                int index;
+                if (lowerNodes.isEmpty()) {
+                    index = this.nodeRegistry.lastEntry().getKey();
+                    neighbor = this.nodeRegistry.lastEntry().getValue();
+                } else {
+                    index = lowerNodes.lastEntry().getKey();
+                    neighbor = lowerNodes.lastEntry().getValue();
+                }
+
+                System.out.printf("[NODE %d] Asking Data Items to NODE %d\n", this.id, index);
+
+                int randomTimeout = 50 + random.nextInt(450);
+                    getContext().system().scheduler().scheduleOnce(
+                        Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
+                        neighbor,
+                        new Messages.RequestDataItems(this.id, UpdateType.RECOVERY), // the message to send
+                        getContext().system().dispatcher(), 
+                        getSelf()
+                    );
+
+                this.dataStore.entrySet().removeIf(entry -> {
+                    Integer key = entry.getKey();
+                    VersionedValue value = entry.getValue();
+                    List<ActorRef> nNodes = getNextNNodes(key);
+                    
+                    if (!nNodes.contains(getSelf())) {
+                        System.out.printf("[NODE %d] Due to Recovery dropped (Key -> %d, value -> %s)\n", 
+                                        this.id, key, value);
+                        return true; // Remove this entry
+                    }
+                    return false; // Keep this entry
+                });
             }
-            int randomTimeout = 50 + random.nextInt(450);
-                getContext().system().scheduler().scheduleOnce(
-                    Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                    neighbor,
-                    new Messages.RequestDataItems(this.id), // the message to send
-                    getContext().system().dispatcher(), 
-                    getSelf()
-                );
-            
+            case JOIN -> {
+                SortedMap<Integer, ActorRef> higherNodes = this.nodeRegistry.tailMap(this.id);
+                ActorRef neighbor;
+
+
+                // TODO if contacting node is crashed choose another one
+                if (higherNodes.isEmpty()) {
+                    neighbor = this.nodeRegistry.firstEntry().getValue();
+                } else {
+                    neighbor = higherNodes.firstEntry().getValue();
+                }
+                int randomTimeout = 50 + random.nextInt(450);
+                    getContext().system().scheduler().scheduleOnce(
+                        Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
+                        neighbor,
+                        new Messages.RequestDataItems(this.id, UpdateType.JOIN), // the message to send
+                        getContext().system().dispatcher(), 
+                        getSelf()
+                    );
+                
+            }
+            default -> System.out.println("BOH");
         }
 
         System.out.println("[NODE REGISTRY UPDATED] Node " + this.id + " now knows about " + this.nodeRegistry.size() + " nodes");
@@ -622,9 +735,7 @@ public class StorageNode extends AbstractActor implements DataService {
 
     private void onAnnouce(Messages.Announce msg) {
         this.nodeRegistry.put(msg.announcingId, sender());
-        Map<Integer, VersionedValue> requestedDataItems = this.dataStore.entrySet().stream()
-            .filter(entry -> entry.getKey() <= msg.announcingId)
-            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        Map<Integer, VersionedValue> requestedDataItems = new HashMap<>(this.dataStore);
 
         for(Integer key: requestedDataItems.keySet()) {
             List<ActorRef> shouldPosess = getNextNNodes(key);
@@ -651,9 +762,10 @@ public class StorageNode extends AbstractActor implements DataService {
             .match(Messages.DataItemsResponse.class, this::onDataItemsReponse)
             .match(Messages.Announce.class, this::onAnnouce)
             .match(Messages.UpdateNodeRegistry.class, this::onUpdateNodeRegistry) // for testing
-            .match(Messages.LeaveMsg.class, this::onLeave)
-            .match(Messages.CrashMsg.class, this::onCrash)
-            .match(Messages.RecoveryMsg.class, this::onRecovery)
+            .match(Messages.Leave.class, this::onLeave)
+            .match(Messages.NotifyLeave.class, this::onNotifyLeave)
+            .match(Messages.Crash.class, this::onCrash)
+            .match(Messages.Recovery.class, this::onRecovery)
             .match(Messages.ClientUpdate.class, this::onClientUpdate)
             .match(Messages.ReplicaUpdate.class, this::onReplicaUpdate)
             .match(Messages.ClientGet.class, this::onClientGet)
@@ -661,5 +773,13 @@ public class StorageNode extends AbstractActor implements DataService {
             .match(Messages.GetResponse.class, this::onGetResponse)
             .match(Messages.DebugPrintDataStore.class, this::onDebugPrintDataStore) // For debugging
             .build();
-    }    
+    }
+    
+    
+    public Receive crashed() {
+      return receiveBuilder()
+              .match(Messages.Recovery.class, this::onRecovery)
+              .matchAny(msg -> {})
+              .build();
+    }
 }

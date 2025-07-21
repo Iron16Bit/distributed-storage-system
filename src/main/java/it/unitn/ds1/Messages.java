@@ -6,6 +6,7 @@ import java.util.SortedMap;
 
 import akka.actor.ActorRef;
 import it.unitn.ds1.types.GetType;
+import it.unitn.ds1.types.UpdateType;
 import it.unitn.ds1.utils.VersionedValue;
 
 public class Messages {
@@ -25,25 +26,45 @@ public class Messages {
 
     public static class RequestDataItems implements Serializable{
         public final int askingID;
+        public final UpdateType type;
     
-        public RequestDataItems(int askingID) {
+        public RequestDataItems(int askingID, UpdateType type) {
             this.askingID = askingID;
+            this.type = type;
         }
     }
 
     public static class DataItemsResponse implements Serializable {
         public final Map<Integer, VersionedValue> dataItems;
+        public final UpdateType type;
         
-        public DataItemsResponse(Map<Integer, VersionedValue> dataItems) {
+        public DataItemsResponse(Map<Integer, VersionedValue> dataItems, UpdateType type) {
             this.dataItems = dataItems;
+            this.type = type;
         }
     }
 
-    public static class LeaveMsg implements Serializable {}
+    public static class Leave implements Serializable {}
 
-    public static class RecoveryMsg implements Serializable {}
+    public static class NotifyLeave implements Serializable {
+        public final int leavingId;
+        public final Map<Integer, VersionedValue> items;
 
-    public static class CrashMsg implements Serializable {}
+        public NotifyLeave(int leavingId, Map<Integer, VersionedValue> items) {
+            this.leavingId = leavingId;
+            this.items = items;
+        }
+    }
+
+    public static class Recovery implements Serializable {
+        public final ActorRef recoveryNode;
+
+        public Recovery(ActorRef recoveryNode) {
+            this.recoveryNode = recoveryNode;
+        }
+    }
+
+    public static class Crash implements Serializable {}
 
     public static class ClientUpdate implements Serializable {
         public final int key;
@@ -126,7 +147,13 @@ public class Messages {
         }
     }
 
-    public static class RequestNodeRegistry implements Serializable {}
+    public static class RequestNodeRegistry implements Serializable {
+        public final UpdateType type;
+
+        public RequestNodeRegistry(UpdateType type) {
+            this.type = type;
+        }
+    }
 
     public static class Announce implements Serializable {
         public final int announcingId;
@@ -141,11 +168,11 @@ public class Messages {
     // Add this to your Messages class
     public static class UpdateNodeRegistry implements Serializable {
         public final SortedMap<Integer, ActorRef> nodeRegistry;
-        public final boolean isInit;
+        public final UpdateType type;
         
-        public UpdateNodeRegistry(SortedMap<Integer, ActorRef> nodeRegistry, boolean isInit) {
+        public UpdateNodeRegistry(SortedMap<Integer, ActorRef> nodeRegistry, UpdateType type) {
             this.nodeRegistry = nodeRegistry;
-            this.isInit = isInit;
+            this.type = type;
         }
     }
     

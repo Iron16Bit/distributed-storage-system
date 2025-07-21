@@ -17,13 +17,7 @@ public class Client extends AbstractActor {
     
     // private Integer coordinatorID; decided randomly from main (for testing we can force it)
     
-    private ActorRef coordinator;
     private Map<Integer, VersionedValue> dataStore = new HashMap<>();
-    
-    //--Constructor--
-    public Client(ActorRef coordinator) {
-        this.coordinator = coordinator;
-    }
 
     //--Getters and Setters--
     public Map<Integer, VersionedValue> getDataStore() {
@@ -84,8 +78,8 @@ public class Client extends AbstractActor {
 
     }
 
-    static public Props props(ActorRef coordinator) {
-        return Props.create(Client.class, () -> new Client(coordinator));
+    static public Props props() {
+        return Props.create(Client.class, () -> new Client());
     }
 
     @Override
