@@ -46,7 +46,7 @@ public class Client extends AbstractActor {
         
         // If client has a newer version, reject the response
         if (localValue.getVersion() > msg.value.getVersion()) {
-            System.out.println("[REJECT] Item (key " + msg.key + ") Read older vePrsion");
+            System.out.println("[REJECT] Item (key " + msg.key + ") Read older version");
             return;
         }
         System.out.println("[ACCEPT] Read Item: Key->" + msg.key + ",value->" + msg.value);
