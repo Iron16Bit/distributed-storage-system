@@ -220,6 +220,8 @@ public class Main {
         sleepForOperation(OperationType.CRASH);
         printNodeContents(testNodeRegistry);
 
+        System.out.println("\n");
+
         // Just for testing, need to change coordinator on Client
         System.out.println("=== Operation 17: Node 1 Joins ===");
         node1.tell(new Messages.Join(node10), nodeSystem);

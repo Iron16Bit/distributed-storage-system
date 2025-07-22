@@ -326,13 +326,7 @@ public class StorageNode extends AbstractActor implements DataService {
         // Filter requested Data items for the joining Storage Node
         Map<Integer, VersionedValue> requestedDataItems;
         
-        if (msg.type == UpdateType.JOIN) {
-            requestedDataItems = this.dataStore.entrySet().stream()
-                .filter(entry -> entry.getKey() <= msg.askingID)
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-        } else {
-            requestedDataItems = new HashMap<>(this.dataStore);
-        }
+        requestedDataItems = new HashMap<>(this.dataStore);
 
         int randomTimeout = 50 + random.nextInt(Messages.DELAY);
         getContext().system().scheduler().scheduleOnce(
