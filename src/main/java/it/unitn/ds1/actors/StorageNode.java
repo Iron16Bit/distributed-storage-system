@@ -12,7 +12,6 @@ import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
@@ -118,6 +117,17 @@ public class StorageNode extends AbstractActor implements DataService {
         this.nodeRegistry = nodeRegistry;
     }
 
+    private void scheduleMessage(ActorRef receiver, ActorRef sender, Object msg) {
+        int randomTimeout = 50 + random.nextInt(Messages.DELAY);
+                        getContext().system().scheduler().scheduleOnce(
+                            Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
+                            receiver,
+                            msg, // the message to send
+                            getContext().system().dispatcher(), 
+                            sender
+                        );
+    }
+
     //works only on the same coordinator
     private boolean isLocked(int key, OpType op) {
         List<String> getOperationIdsList = new ArrayList<>(pendingGet.keySet());
@@ -179,21 +189,21 @@ public class StorageNode extends AbstractActor implements DataService {
     }
 
 
-    private List<ActorRef> getNextNNodes(int key) {
+    private List<ActorRef> getNextNNodes(int key, SortedMap<Integer,ActorRef> nodeRegistry) {
         List<ActorRef> result = new ArrayList<>();
         
-        if (key < 0 || this.nodeRegistry.isEmpty()) {
+        if (key < 0 || nodeRegistry.isEmpty()) {
             return result;
         }
 
         // For single node, return self
-        if (this.nodeRegistry.size() == 1) {
-            result.add(this.nodeRegistry.firstEntry().getValue());
+        if (nodeRegistry.size() == 1) {
+            result.add(nodeRegistry.firstEntry().getValue());
             return result;
         }
 
         // Get all node IDs in sorted order
-        List<Integer> nodeIds = new ArrayList<>(this.nodeRegistry.keySet());
+        List<Integer> nodeIds = new ArrayList<>(nodeRegistry.keySet());
         
         // Find the first node with ID >= key (consistent hashing)
         int startIndex = 0;
@@ -208,7 +218,7 @@ public class StorageNode extends AbstractActor implements DataService {
         for (int i = 0; i < DataStoreManager.N && i < nodeIds.size(); i++) {
             int index = (startIndex + i) % nodeIds.size();
             Integer nodeId = nodeIds.get(index);
-            result.add(this.nodeRegistry.get(nodeId));
+            result.add(nodeRegistry.get(nodeId));
         }
 
         return result;
@@ -261,15 +271,8 @@ public class StorageNode extends AbstractActor implements DataService {
                     UpdateOperation updateOperation = pendingUpdate.remove(msg.operationId);
                     pendingGet.remove(msg.operationId);
 
-                    for (ActorRef ref: getNextNNodes(updateOperation.key)) {
-                        int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                        getContext().system().scheduler().scheduleOnce(
-                            Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                            ref,
-                            msg, // the message to send
-                            getContext().system().dispatcher(), 
-                            getSelf()
-                        );
+                    for (ActorRef ref: getNextNNodes(updateOperation.key, this.nodeRegistry)) {
+                        scheduleMessage(ref, getSelf(), msg);
                     }
                 } else {
                     releaseLock(msg.key, msg.operationId);
@@ -298,27 +301,11 @@ public class StorageNode extends AbstractActor implements DataService {
 
     private void onJoin(Messages.Join msg) {
         //TODO in case of timeout ask/change bootstrapping peer
-
-        int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-        getContext().system().scheduler().scheduleOnce(
-            Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-            msg.bootstrappingPeer,
-            new Messages.RequestNodeRegistry(UpdateType.JOIN), // the message to send
-            getContext().system().dispatcher(), 
-            getSelf()
-        );
+        scheduleMessage(msg.bootstrappingPeer, getSelf(), new Messages.RequestNodeRegistry(UpdateType.JOIN));
     }
 
     private void onRequestNodeRegistry(Messages.RequestNodeRegistry msg) {
-
-        int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-        getContext().system().scheduler().scheduleOnce(
-            Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-            sender(),
-            new Messages.UpdateNodeRegistry(this.nodeRegistry, msg.type), // the message to send
-            getContext().system().dispatcher(), 
-            getSelf()
-        );
+        scheduleMessage(sender(), getSelf(), new Messages.UpdateNodeRegistry(this.nodeRegistry, msg.type));
     }
 
     private void onRequestDataItems(Messages.RequestDataItems msg) {
@@ -328,41 +315,31 @@ public class StorageNode extends AbstractActor implements DataService {
         
         requestedDataItems = new HashMap<>(this.dataStore);
 
-        int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-        getContext().system().scheduler().scheduleOnce(
-            Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-            sender(),
-            new Messages.DataItemsResponse(requestedDataItems, msg.type), // the message to send
-            getContext().system().dispatcher(), 
-            getSelf()
-        );
+        scheduleMessage(sender(), getSelf(), new Messages.DataItemsResponse(requestedDataItems, msg.type));
     }
 
     private void onDataItemsReponse(Messages.DataItemsResponse msg) {
 
-        for (Integer key: msg.dataItems.keySet()) {
-            
-            
-            List<ActorRef> nNodes = getNextNNodes(key);
+        SortedMap<Integer, ActorRef> futureMap = new TreeMap<>(this.nodeRegistry);
+        futureMap.put(this.id, getSelf());
 
+        for (Integer key: msg.dataItems.keySet()) {
+
+            List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
+            
             if (msg.type == UpdateType.JOIN) {
+                
+                if (!getNextNNodes(key, futureMap).contains(getSelf())) continue;
+
                 String operationId = this.id + "-" + key + "-" + (++this.operationCounter);
     
                 GetOperation getOperation = new GetOperation(key, getSelf(), GetType.INIT);
                 pendingGet.put(operationId, getOperation);
                 
                 for (ActorRef ref: nNodes) {
-                    int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                    getContext().system().scheduler().scheduleOnce(
-                        Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                        ref,
-                        new Messages.ReplicaGet(key, operationId, GetType.INIT), // the message to send
-                        getContext().system().dispatcher(), 
-                        getSelf()
-                    );
+                    scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(key, operationId, GetType.INIT));
                 }
             } else {
-
                 // Value is added if it's now requested and not present inside the personal dataStore.
                 if (nNodes.contains(getSelf()) && !this.dataStore.containsKey(key)) {
                     System.out.printf("[NODE %d] Due to Recovery added (Key -> %d, value -> %s)\n", this.id, key, msg.dataItems.get(key));
@@ -386,14 +363,7 @@ public class StorageNode extends AbstractActor implements DataService {
         this.nodeRegistry.remove(this.id);
 
         for (ActorRef ref: nodeRegistry.values()) {
-            int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-            getContext().system().scheduler().scheduleOnce(
-                Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                ref,
-                new Messages.NotifyLeave(this.id, this.dataStore), // the message to send
-                getContext().system().dispatcher(), 
-                getSelf()
-            );
+            scheduleMessage(ref, getSelf(), new Messages.NotifyLeave(this.id, this.dataStore));
         }
         System.out.println("[NODE" + this.id +"] Announces leave");
     }
@@ -404,7 +374,7 @@ public class StorageNode extends AbstractActor implements DataService {
         this.nodeRegistry.remove(msg.leavingId);
 
         for (Integer key: msg.items.keySet()) {
-            List<ActorRef> newOwners = getNextNNodes(key);
+            List<ActorRef> newOwners = getNextNNodes(key, this.nodeRegistry);
 
             if (newOwners.contains(getSelf())) {
                 VersionedValue givenValue =  msg.items.get(key);
@@ -427,17 +397,8 @@ public class StorageNode extends AbstractActor implements DataService {
 
     private void onRecovery(Messages.Recovery msg) {
         getContext().become(createReceive());
-
         System.out.printf("[NODE %d] Recovering\n", this.id);
-
-        int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-        getContext().system().scheduler().scheduleOnce(
-            Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-            msg.recoveryNode,
-            new Messages.RequestNodeRegistry(UpdateType.RECOVERY),
-            getContext().system().dispatcher(), 
-            getSelf()
-        );
+        scheduleMessage(msg.recoveryNode, getSelf(), new Messages.RequestNodeRegistry(UpdateType.RECOVERY));
     }
 
     private void onClientUpdate(Messages.ClientUpdate msg) {
@@ -450,7 +411,7 @@ public class StorageNode extends AbstractActor implements DataService {
 
         String operationId = this.id + "-" + msg.key + "-" + (++operationCounter);
 
-        List<ActorRef> nodeList = getNextNNodes(msg.key);
+        List<ActorRef> nodeList = getNextNNodes(msg.key, this.nodeRegistry);
 
         // Create a get operation that includes the update value
         GetOperation getOperation = new GetOperation(msg.key, sender(), msg.value);
@@ -465,14 +426,7 @@ public class StorageNode extends AbstractActor implements DataService {
                 getOperation.responses.add(localValue);
                 System.out.println("[LOCAL READ FOR UPDATE] versioned value: " + localValue);
             } else {
-                int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                getContext().system().scheduler().scheduleOnce(
-                    Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                    ref,
-                    new Messages.ReplicaGet(msg.key, operationId, GetType.UPDATE), // the message to send
-                    getContext().system().dispatcher(), 
-                    getSelf()
-                );
+                scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(msg.key, operationId, GetType.UPDATE));
             }
         }
 
@@ -504,7 +458,7 @@ public class StorageNode extends AbstractActor implements DataService {
 
         //Calculate read quorum (e.g., majority)
         //TODO make read quorum constant
-        List<ActorRef> nodeList = getNextNNodes(msg.key);
+        List<ActorRef> nodeList = getNextNNodes(msg.key, this.nodeRegistry);
 
         // Create operation State
         GetOperation operation = new GetOperation(msg.key, sender(), GetType.GET);
@@ -519,14 +473,7 @@ public class StorageNode extends AbstractActor implements DataService {
                 System.out.println("[LOCAL GET] versioned value: " + localValue);
                 // System.out.println("[NODE " + this.id + "] Datastore" + this.dataStore);
             } else {
-                int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                getContext().system().scheduler().scheduleOnce(
-                    Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                    ref,
-                    new Messages.ReplicaGet(msg.key, operationId, GetType.GET), // the message to send
-                    getContext().system().dispatcher(), 
-                    getSelf()
-                );
+                scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(msg.key, operationId, GetType.GET));
             }
         }
 
@@ -545,14 +492,7 @@ public class StorageNode extends AbstractActor implements DataService {
         }
 
         VersionedValue requestedValue = this.dataStore.get(msg.key);
-        int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-        getContext().system().scheduler().scheduleOnce(
-            Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-            sender(),
-            new Messages.GetResponse(msg.key, requestedValue, msg.operationId), // the message to send
-            getContext().system().dispatcher(), 
-            getSelf()
-        );
+        scheduleMessage(sender(), getSelf(), new Messages.GetResponse(msg.key, requestedValue, msg.operationId));
         
         // For regular GET and INIT operations, release lock immediately
         // For UPDATE operations (read-before-update), keep the lock until update completes
@@ -598,14 +538,7 @@ public class StorageNode extends AbstractActor implements DataService {
                         response = new Messages.UpdateResponse(operation.key, new VersionedValue(operation.updateValue, currentValue.getVersion() + 1), operationId);
                     }
 
-                    int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                    getContext().system().scheduler().scheduleOnce(
-                        Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                        operation.client,
-                        response, // the message to send
-                        getContext().system().dispatcher(), 
-                        getSelf()
-                    );
+                    scheduleMessage(operation.client, getSelf(), response);
                     // This was a read-before-update, now perform the actual update
                     pendingGet.remove(operationId);
                     performActualUpdate(operation.key, operation.updateValue, operationId, operation.client, currentValue);
@@ -621,14 +554,7 @@ public class StorageNode extends AbstractActor implements DataService {
                     }
                     // This was a regular get, send response to client
                     Messages.GetResponse response = new Messages.GetResponse(operation.key, latestValue, operationId);
-                    int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                    getContext().system().scheduler().scheduleOnce(
-                        Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                        operation.client,
-                        response, // the message to send
-                        getContext().system().dispatcher(), 
-                        getSelf()
-                    );
+                    scheduleMessage(operation.client, getSelf(), response);
                     pendingGet.remove(operationId);
                     System.out.println("[READ COMPLETED] Key: " + operation.key);
                 }
@@ -644,22 +570,16 @@ public class StorageNode extends AbstractActor implements DataService {
                     
                     this.dataStore.put(operation.key, latestValue);
                     pendingGet.remove(operationId);
-                    System.out.println("[NODE " + this.id + "] Inserted Value: " + latestValue);
-
-
-                    this.nodeRegistry.put(this.id, getSelf());
-                    System.out.println("I have inserted my self inside the nodeRegistry: id ->" + this.id);
+                    // System.out.println("[NODE " + this.id + "] Inserted Value: " + latestValue);
+                    if (!this.nodeRegistry.containsKey(this.id)) {
+                        System.out.printf("[NODE %d] Inserted Value: %s, is this value correct? %b\n", this.id, latestValue, getNextNNodes(operation.key, this.nodeRegistry).contains(getSelf()));
+                        this.nodeRegistry.put(this.id, getSelf());
+                        System.out.println("I have inserted my self inside the nodeRegistry: id ->" + this.id);
+                    }
             
                     for (ActorRef ref: nodeRegistry.values()) {
                         if (ref != getSelf()) {
-                            int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                            getContext().system().scheduler().scheduleOnce(
-                                Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                                ref,
-                                new Messages.Announce(this.id), // the message to send
-                                getContext().system().dispatcher(), 
-                                getSelf()
-                            );
+                            scheduleMessage(ref, getSelf(), new Messages.Announce(this.id));
                         } 
                     }
                 }
@@ -668,7 +588,7 @@ public class StorageNode extends AbstractActor implements DataService {
     }
 
     private void performActualUpdate(int key, String value, String operationId, ActorRef client, VersionedValue currentValue) {
-        List<ActorRef> nodeList = getNextNNodes(key);
+        List<ActorRef> nodeList = getNextNNodes(key, this.nodeRegistry);
 
         UpdateOperation operation = pendingUpdate.get(operationId);
 
@@ -684,14 +604,7 @@ public class StorageNode extends AbstractActor implements DataService {
                 System.out.println("[LOCAL UPDATE] versioned value: " + versionedValue);
                 System.out.println("[NODE " + this.id + "] Datastore" + this.dataStore);
             } else {
-                int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                getContext().system().scheduler().scheduleOnce(
-                    Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                    ref,
-                    new Messages.ReplicaUpdate(key, value, operationId, currentValue), // the message to send
-                    getContext().system().dispatcher(), 
-                    getSelf()
-                );
+                scheduleMessage(ref, getSelf(), new Messages.ReplicaUpdate(key, value, operationId, currentValue));
             }
         }
 
@@ -726,19 +639,12 @@ public class StorageNode extends AbstractActor implements DataService {
 
                 System.out.printf("[NODE %d] Asking Data Items to NODE %d\n", this.id, index);
 
-                int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                    getContext().system().scheduler().scheduleOnce(
-                        Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                        neighbor,
-                        new Messages.RequestDataItems(this.id, UpdateType.RECOVERY), // the message to send
-                        getContext().system().dispatcher(), 
-                        getSelf()
-                    );
+                scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, UpdateType.RECOVERY));
 
                 this.dataStore.entrySet().removeIf(entry -> {
                     Integer key = entry.getKey();
                     VersionedValue value = entry.getValue();
-                    List<ActorRef> nNodes = getNextNNodes(key);
+                    List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
                     
                     if (!nNodes.contains(getSelf())) {
                         System.out.printf("[NODE %d] Due to Recovery dropped (Key -> %d, value -> %s)\n", 
@@ -759,14 +665,7 @@ public class StorageNode extends AbstractActor implements DataService {
                 } else {
                     neighbor = higherNodes.firstEntry().getValue();
                 }
-                int randomTimeout = 50 + random.nextInt(Messages.DELAY);
-                    getContext().system().scheduler().scheduleOnce(
-                        Duration.create(randomTimeout, TimeUnit.MILLISECONDS),  
-                        neighbor,
-                        new Messages.RequestDataItems(this.id, UpdateType.JOIN), // the message to send
-                        getContext().system().dispatcher(), 
-                        getSelf()
-                    );
+                scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, UpdateType.JOIN));
                 
             }
             default -> System.out.println("BOH");
@@ -780,7 +679,7 @@ public class StorageNode extends AbstractActor implements DataService {
         Map<Integer, VersionedValue> requestedDataItems = new HashMap<>(this.dataStore);
 
         for(Integer key: requestedDataItems.keySet()) {
-            List<ActorRef> shouldPosess = getNextNNodes(key);
+            List<ActorRef> shouldPosess = getNextNNodes(key, this.nodeRegistry);
             if (!shouldPosess.contains(getSelf())) {
                 VersionedValue itemToRemove = this.dataStore.get(key); 
                 System.out.println("[NODE " + this.id + "] Due to join operation of NODE: " + msg.announcingId + ", dropped data item: (key -> " + key + ") " + itemToRemove);
