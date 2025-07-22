@@ -8,11 +8,27 @@ import akka.actor.ActorRef;
 import it.unitn.ds1.types.GetType;
 import it.unitn.ds1.types.UpdateType;
 import it.unitn.ds1.utils.VersionedValue;
+import it.unitn.ds1.utils.OperationDelays.OperationType;
 
 public class Messages {
 
+    public static final int DELAY = 950;
+
     // Debug message to print the contents of a node's data store
     public static class DebugPrintDataStore implements Serializable {}
+
+
+    public static class Timeout implements Serializable {
+        public final String operationId;
+        public final OperationType opType;
+        public final int key;
+
+        public Timeout(String operationId, OperationType opType, int key) {
+            this.operationId = operationId;
+            this.opType = opType;
+            this.key = key;
+        }
+    }
 
     //--Messages--
     public static class Join implements Serializable {
