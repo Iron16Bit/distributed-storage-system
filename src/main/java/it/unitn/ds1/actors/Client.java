@@ -3,97 +3,93 @@ package it.unitn.ds1.actors;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import akka.actor.AbstractActor;
 import akka.actor.Props;
 import it.unitn.ds1.Messages;
 import it.unitn.ds1.utils.VersionedValue;
 
-
-
-
-//this class implements client functionalities
 public class Client extends AbstractActor {
     
-    // private Integer coordinatorID; decided randomly from main (for testing we can force it)
+    private static final Logger logger = LoggerFactory.getLogger(Client.class);
     
-    private Map<Integer, VersionedValue> dataStore = new HashMap<>();
+    private final Map<Integer, VersionedValue> dataStore = new HashMap<>();
 
-    //--Getters and Setters--
+    // Getters and Setters
     public Map<Integer, VersionedValue> getDataStore() {
-        return dataStore;
+        return new HashMap<>(dataStore);
     }
 
     public void setDataStore(Map<Integer, VersionedValue> dataStore) {
-        this.dataStore = dataStore;
+        this.dataStore.clear();
+        this.dataStore.putAll(dataStore);
     }
 
-    //--Messages--
+    // Message Handlers with simplified logging
     private void onGetResponse(Messages.GetResponse msg) {
-        //Check if the response is null -> no item found or other possible errors.
         if (msg.value == null) {
-            System.out.println("[REJECT]  Item (key " + msg.key + ") cannot be found ");
+            logger.info("GET REJECTED - Key {} not found", msg.key);
             return;
         }
-    
-        VersionedValue localValue = this.dataStore.get(msg.key);
 
-        // If clienmt doesn't currenlty have the item, accept the reponse
+        VersionedValue localValue = dataStore.get(msg.key);
+
         if (localValue == null) {
-            System.out.println("[ACCEPT] Read Item: Key->" + msg.key + ", Value->" + msg.value);
+            logger.info("GET ACCEPTED - Key: {}, Value: {}", msg.key, msg.value);
             dataStore.put(msg.key, msg.value);
             return;
         }
         
-        // If client has a newer version, reject the response
         if (localValue.getVersion() > msg.value.getVersion()) {
-            System.out.println("[REJECT] Item (key " + msg.key + ") Read older version");
+            logger.info("GET REJECTED - Key {} has older version (local: v{}, received: v{})", 
+                       msg.key, localValue.getVersion(), msg.value.getVersion());
             return;
         }
-        System.out.println("[ACCEPT] Read Item: Key->" + msg.key + ",value->" + msg.value);
+        
+        logger.info("GET ACCEPTED - Key: {}, Value: {}", msg.key, msg.value);
         dataStore.put(msg.key, msg.value);
     }
 
     private void onUpdateResponse(Messages.UpdateResponse msg) {
         if (msg.versionedValue == null) {
-            System.out.println("[REJECT]  Item (key " + msg.key + ") possible WTF moment ");
+            logger.error("UPDATE REJECTED - Key {} received null value", msg.key);
             return;
         }
 
-        VersionedValue localValue = this.dataStore.get(msg.key);
-        // If clienmt doesn't currenlty have the item, accept the reponse
+        VersionedValue localValue = dataStore.get(msg.key);
+        
         if (localValue == null) {
-            System.out.println("[ACCEPT] Updated Item: Key->" + msg.key + ", Versioned Value->" + msg.versionedValue);
+            logger.info("UPDATE ACCEPTED - Key: {}, Value: {}", msg.key, msg.versionedValue);
             dataStore.put(msg.key, msg.versionedValue);
             return;
         }
 
-        // If client has a newer version, reject the response
         if (localValue.getVersion() > msg.versionedValue.getVersion()) {
-            System.out.println("[REJECT] Item (key " + msg.key + ") write inconsistent (older than actual value)");
+            logger.warn("UPDATE REJECTED - Key {} inconsistent (local: v{}, received: v{})", 
+                       msg.key, localValue.getVersion(), msg.versionedValue.getVersion());
             return;
         }
-        System.out.println("[ACCEPT] Updated Item: Key->" + msg.key + ",Versioned Value->" + msg.versionedValue);
+        
+        logger.info("UPDATE ACCEPTED - Key: {}, Value: {}", msg.key, msg.versionedValue);
         dataStore.put(msg.key, msg.versionedValue);
-
     }
 
     private void onError(Messages.Error msg) {
-        System.out.printf("[ERROR] for operation %s for key %d, operationId %s\n", msg.operationType, msg.key, msg.operationId);
+        logger.error("ERROR - {}: Key {}", msg.operationType, msg.key);
     }
 
-    static public Props props() {
-        return Props.create(Client.class, () -> new Client());
+    public static Props props() {
+        return Props.create(Client.class, Client::new);
     }
 
     @Override
     public Receive createReceive() {
-        //TODO check if something missing
         return receiveBuilder()
             .match(Messages.GetResponse.class, this::onGetResponse)
             .match(Messages.UpdateResponse.class, this::onUpdateResponse)
             .match(Messages.Error.class, this::onError)
             .build();
-    }  
-
-
+    }
 }
