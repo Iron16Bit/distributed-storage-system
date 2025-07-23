@@ -468,7 +468,7 @@ public class StorageNode extends AbstractActor implements DataService {
         
         String operationId = this.id + "-" + msg.key + "-" + (++operationCounter);
 
-        if(isLocked(msg.key, OpType.UPDATE) || isLocked(msg.key, OpType.GET) && acquireLock(msg.key, OpType.UPDATE, operationId)) {
+        if(isLocked(msg.key, OpType.UPDATE) || isLocked(msg.key, OpType.GET) || !acquireLock(msg.key, OpType.UPDATE, operationId)) {
             logger.warn("Node {} - UPDATE rejected: key {} is locked", this.id, msg.key);
             scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_UPDATE));
             return;
@@ -508,7 +508,7 @@ public class StorageNode extends AbstractActor implements DataService {
         
         String operationId = this.id + "-" + msg.key + "-" + (++operationCounter);
 
-        if(isLocked(msg.key, OpType.UPDATE) && acquireLock(msg.key, OpType.GET, operationId)) {
+        if(isLocked(msg.key, OpType.UPDATE) || !acquireLock(msg.key, OpType.GET, operationId)) {
             logger.warn("Node {} - GET rejected: key {} is locked for update", this.id, msg.key);
             scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_GET));
             return;
