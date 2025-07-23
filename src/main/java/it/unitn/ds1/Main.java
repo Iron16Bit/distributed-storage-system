@@ -129,9 +129,9 @@ public class Main {
         node10.tell(new Messages.ClientGet(1), client3);
         sleepForOperation(OperationType.CLIENT_GET);
 
-        logger.info("=== Operation 8: Concurrent updates to same key ===");
-        node7.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-1"), client1);
-        node10.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-2"), client2);
+        logger.info("=== Operation 8: Concurrent updates to same key (deadlock -> timeout) ===");
+        node1.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-1"), client1);
+        node5.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-2"), client2);
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(testNodeRegistry);
     }
@@ -182,6 +182,12 @@ public class Main {
         sleepForOperation(OperationType.LEAVE);
         testNodeRegistry.remove(10);
         printNodeContents(testNodeRegistry);
+
+        logger.info("=== Operation 15.5: Node Join operation ===");
+        node10.tell(new Messages.Join(node1), nodeSystem);
+        sleepForOperation(OperationType.JOIN);
+        testNodeRegistry.put(10,node10);
+        printNodeContents(testNodeRegistry);
     }
 
     // Test concurrent operations and race conditions
@@ -200,13 +206,13 @@ public class Main {
         printNodeContents(testNodeRegistry);
 
         logger.info("=== Operation 18: Sequential updates to test versioning ===");
-        node5.tell(new Messages.ClientUpdate(26, "V1"), client1);
+        node10.tell(new Messages.ClientUpdate(26, "V1"), client1);
         sleepForOperation(OperationType.CLIENT_UPDATE);
         
         node7.tell(new Messages.ClientUpdate(26, "V2"), client2);
         sleepForOperation(OperationType.CLIENT_UPDATE);
         
-        node10.tell(new Messages.ClientUpdate(26, "V3"), client3);
+        node5.tell(new Messages.ClientUpdate(26, "V3"), client3);
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(testNodeRegistry);
     }

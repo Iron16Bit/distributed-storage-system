@@ -313,6 +313,7 @@ public class StorageNode extends AbstractActor implements DataService {
             }
             case JOIN -> {
                 if (this.nodeRegistry.isEmpty()) {
+                    getContext().become(initialSpawn());
                     logger.error("Node {} - JOIN timeout: cannot contact neighbor", this.id);
                 } else {
                     logger.debug("Node {} - JOIN timeout ignored (already connected)", this.id);
@@ -332,10 +333,7 @@ public class StorageNode extends AbstractActor implements DataService {
     }
 
     private void onJoin(Messages.Join msg) {
-        if (!this.nodeRegistry.isEmpty()) {
-            logger.warn("Node {} - Cannot JOIN: already inside cluster", this.id);
-            return;
-        }
+        getContext().become(createReceive());
         
         logger.info("Node {} - Initiating JOIN operation", this.id);
         scheduleMessage(msg.bootstrappingPeer, getSelf(), new Messages.RequestNodeRegistry(UpdateType.JOIN));
@@ -421,6 +419,7 @@ public class StorageNode extends AbstractActor implements DataService {
                 scheduleMessage(ref, getSelf(), new Messages.RepartitionData(this.id, this.dataStore));
             }
             this.nodeRegistry.clear();
+            getContext().become(initialSpawn());
             logger.info("Node {} - Successfully left the cluster", this.id);
         }
     }
@@ -471,7 +470,7 @@ public class StorageNode extends AbstractActor implements DataService {
 
         // Check coordinator-level locks first
         if(isLocked(msg.key, OpType.UPDATE) || isLocked(msg.key, OpType.GET)) {
-            logger.warn("Node {} - UPDATE rejected: key {} is locked at coordinato level", this.id, msg.key);
+            logger.warn("Node {} - UPDATE rejected: key {} is locked at coordinator level", this.id, msg.key);
             scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_UPDATE));
             return;
         }
@@ -509,8 +508,8 @@ public class StorageNode extends AbstractActor implements DataService {
 
     private void onReplicaUpdate(Messages.ReplicaUpdate msg) {
         VersionedValue result = updateWithCurrentValue(msg.key, msg.value, msg.currentValue);
-        logger.debug("Node {} - Replica update completed: key={}, new_value={}", this.id, msg.key, result);
         releaseLock(msg.key, msg.operationId);
+        logger.debug("Node {} - Replica update completed: key={}, new_value={} - lock released", this.id, msg.key, result);
     }
 
 
@@ -559,17 +558,19 @@ public class StorageNode extends AbstractActor implements DataService {
         OpType lockType = (msg.getType == GetType.UPDATE) ? OpType.UPDATE : OpType.GET;
         
         if (!acquireLock(msg.key, lockType, msg.operationId)) {
-            logger.warn("Node {} - Cannot execute {} on key {}: locked", this.id, msg.getType, msg.key);
+            logger.warn("Node {} - Cannot execute {} on key {}: locked at replica level", this.id, msg.getType, msg.key);
             return;
         }
 
         VersionedValue requestedValue = this.dataStore.get(msg.key);
-        logger.debug("Node {} - Replica GET: key={}, value={}, type={}", this.id, msg.key, requestedValue, msg.getType);
-        scheduleMessage(sender(), getSelf(), new Messages.GetResponse(msg.key, requestedValue, msg.operationId));
+        logger.debug("Node {} - Replica GET: key={}, value={}, type={} - lock released", this.id, msg.key, requestedValue, msg.getType);
         
         if (msg.getType == GetType.GET || msg.getType == GetType.INIT) {
             releaseLock(msg.key, msg.operationId);
         }
+
+        scheduleMessage(sender(), getSelf(), new Messages.GetResponse(msg.key, requestedValue, msg.operationId));
+        
     }
 
     private void onGetResponse(Messages.GetResponse msg) {
@@ -643,7 +644,7 @@ public class StorageNode extends AbstractActor implements DataService {
                     pendingGet.remove(operationId);
                     
                     if (!this.nodeRegistry.containsKey(this.id)) {
-                        logger.info("Node {} - JOIN completed: inserted {} data items", this.id, this.dataStore.size());
+                        logger.info("Node {} - JOIN completing/completed, inserted one of the necessary data items", this.id, this.dataStore.size());
                         this.nodeRegistry.put(this.id, getSelf());
                         
                         for (ActorRef ref: nodeRegistry.values()) {
@@ -692,6 +693,8 @@ public class StorageNode extends AbstractActor implements DataService {
             case INIT -> {
                 this.nodeRegistry.put(this.id, getSelf());
                 logger.info("Node {} - Node registry initialized with {} nodes", this.id, this.nodeRegistry.size());
+                // Switch to normal receive mode after initialization
+                getContext().become(createReceive());
             }
             case RECOVERY -> {
                 SortedMap<Integer, ActorRef> lowerNodes = this.nodeRegistry.headMap(this.id);
@@ -775,37 +778,53 @@ public class StorageNode extends AbstractActor implements DataService {
         return Props.create(StorageNode.class, () -> new StorageNode(id));
     }
 
+
+
     @Override
-    public Receive createReceive() {
-        //TODO check if something missing
+    public void preStart() throws Exception {
+        super.preStart();
+        // Set initial behaviour when actor starts
+        getContext().become(initialSpawn());
+    }
+
+    public Receive initialSpawn() {
         return receiveBuilder()
             .match(Messages.Join.class, this::onJoin)
+            .match(Messages.UpdateNodeRegistry.class, this::onUpdateNodeRegistry)
+            .matchAny(_ -> {})
+            .build();
+    }
+
+    @Override
+    public Receive createReceive() {
+        return receiveBuilder()
             .match(Messages.RequestNodeRegistry.class, this::onRequestNodeRegistry)
             .match(Messages.RequestDataItems.class, this::onRequestDataItems)
             .match(Messages.DataItemsResponse.class, this::onDataItemsReponse)
             .match(Messages.Announce.class, this::onAnnouce)
-            .match(Messages.UpdateNodeRegistry.class, this::onUpdateNodeRegistry) // for testing
+            .match(Messages.UpdateNodeRegistry.class, this::onUpdateNodeRegistry)
+            .match(Messages.Join.class, this::onJoin) // Add this line
             .match(Messages.Leave.class, this::onLeave)
             .match(Messages.NotifyLeave.class, this::onNotifyLeave)
             .match(Messages.LeaveACK.class, this::onLeaveACK)
             .match(Messages.RepartitionData.class, this::onRepartitionData)
             .match(Messages.Crash.class, this::onCrash)
-            .match(Messages.Recovery.class, this::onRecovery)
             .match(Messages.ClientUpdate.class, this::onClientUpdate)
             .match(Messages.ReplicaUpdate.class, this::onReplicaUpdate)
             .match(Messages.ClientGet.class, this::onClientGet)
             .match(Messages.ReplicaGet.class, this::onReplicaGet)
             .match(Messages.GetResponse.class, this::onGetResponse)
+            .match(Messages.Recovery.class, this::onRecovery) // Add this if not present
             .match(Messages.Timeout.class, this::onTimeout)
-            .match(Messages.DebugPrintDataStore.class, this::onDebugPrintDataStore) // For debugging
+            .match(Messages.DebugPrintDataStore.class, this::onDebugPrintDataStore)
+            .matchAny(_ -> {})
             .build();
     }
-    
-    
+
     public Receive crashed() {
       return receiveBuilder()
               .match(Messages.Recovery.class, this::onRecovery)
-              .matchAny(msg -> {})
+              .matchAny(_ -> {})
               .build();
     }
 }

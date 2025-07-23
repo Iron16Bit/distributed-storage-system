@@ -12,7 +12,7 @@ import it.unitn.ds1.utils.OperationDelays.OperationType;
 
 public class Messages {
 
-    public static final int DELAY = 950;
+    public static final int DELAY = 450;
 
     // Debug message to print the contents of a node's data store
     public static class DebugPrintDataStore implements Serializable {}
