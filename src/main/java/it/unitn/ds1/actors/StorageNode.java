@@ -206,7 +206,7 @@ public class StorageNode extends AbstractActor implements DataService {
         // Write operation or mixed read / write => deny
         return false;
     }
-
+    
     private boolean releaseLock(int key, String operationId) {
         Set<String> locks = keylocks.get(key);
         if (locks != null) {
@@ -219,6 +219,7 @@ public class StorageNode extends AbstractActor implements DataService {
         }
         return false;
     }
+
 
     private List<ActorRef> getNextNNodes(int key, SortedMap<Integer,ActorRef> nodeRegistry) {
         List<ActorRef> result = new ArrayList<>();
@@ -468,13 +469,23 @@ public class StorageNode extends AbstractActor implements DataService {
         
         String operationId = this.id + "-" + msg.key + "-" + (++operationCounter);
 
-        if(isLocked(msg.key, OpType.UPDATE) || isLocked(msg.key, OpType.GET) || !acquireLock(msg.key, OpType.UPDATE, operationId)) {
-            logger.warn("Node {} - UPDATE rejected: key {} is locked", this.id, msg.key);
+        // Check coordinator-level locks first
+        if(isLocked(msg.key, OpType.UPDATE) || isLocked(msg.key, OpType.GET)) {
+            logger.warn("Node {} - UPDATE rejected: key {} is locked at coordinato level", this.id, msg.key);
             scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_UPDATE));
             return;
         }
 
         List<ActorRef> nodeList = getNextNNodes(msg.key, this.nodeRegistry);
+        
+        // Only acquire replica-level lock if this node is part of the replicas
+        if (nodeList.contains(getSelf())) {
+            if (!acquireLock(msg.key, OpType.UPDATE, operationId)) {
+                logger.warn("Node {} - UPDATE rejected: key {} is locked at replica level", this.id, msg.key);
+                scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_UPDATE));
+                return;
+            }
+        }
 
         GetOperation getOperation = new GetOperation(msg.key, sender(), msg.value);
         pendingGet.put(operationId, getOperation);
@@ -508,13 +519,23 @@ public class StorageNode extends AbstractActor implements DataService {
         
         String operationId = this.id + "-" + msg.key + "-" + (++operationCounter);
 
-        if(isLocked(msg.key, OpType.UPDATE) || !acquireLock(msg.key, OpType.GET, operationId)) {
-            logger.warn("Node {} - GET rejected: key {} is locked for update", this.id, msg.key);
+        if(isLocked(msg.key, OpType.UPDATE)) {
+            logger.warn("Node {} - GET rejected: key {} is locked for update at coordinator level", this.id, msg.key);
             scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_GET));
             return;
         }
 
         List<ActorRef> nodeList = getNextNNodes(msg.key, this.nodeRegistry);
+        
+        // Only acquire replica-level lock if this node is part of the replicas
+        if (nodeList.contains(getSelf())) {
+            if (!acquireLock(msg.key, OpType.GET, operationId)) {
+                logger.warn("Node {} - GET rejected: key {} is locked at replica level", this.id, msg.key);
+                scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_GET));
+                return;
+            }
+        }
+
         GetOperation operation = new GetOperation(msg.key, sender(), GetType.GET);
         pendingGet.put(operationId, operation);
     

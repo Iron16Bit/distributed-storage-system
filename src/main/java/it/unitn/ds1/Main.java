@@ -130,8 +130,8 @@ public class Main {
         sleepForOperation(OperationType.CLIENT_GET);
 
         logger.info("=== Operation 8: Concurrent updates to same key ===");
-        node1.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-1"), client1);
-        node5.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-2"), client2);
+        node7.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-1"), client1);
+        node10.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-2"), client2);
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(testNodeRegistry);
     }
