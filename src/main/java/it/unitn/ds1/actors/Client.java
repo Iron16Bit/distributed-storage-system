@@ -28,7 +28,7 @@ public class Client extends AbstractActor {
     }
 
     //--Messages--
-    public void onGetResponse(Messages.GetResponse msg) {
+    private void onGetResponse(Messages.GetResponse msg) {
         //Check if the response is null -> no item found or other possible errors.
         if (msg.value == null) {
             System.out.println("[REJECT]  Item (key " + msg.key + ") cannot be found ");
@@ -53,7 +53,7 @@ public class Client extends AbstractActor {
         dataStore.put(msg.key, msg.value);
     }
 
-    public void onUpdateResponse(Messages.UpdateResponse msg) {
+    private void onUpdateResponse(Messages.UpdateResponse msg) {
         if (msg.versionedValue == null) {
             System.out.println("[REJECT]  Item (key " + msg.key + ") possible WTF moment ");
             return;
@@ -77,6 +77,10 @@ public class Client extends AbstractActor {
 
     }
 
+    private void onError(Messages.Error msg) {
+        System.out.printf("[ERROR] for operation %s for key %d, operationId %s\n", msg.operationType, msg.key, msg.operationId);
+    }
+
     static public Props props() {
         return Props.create(Client.class, () -> new Client());
     }
@@ -87,6 +91,7 @@ public class Client extends AbstractActor {
         return receiveBuilder()
             .match(Messages.GetResponse.class, this::onGetResponse)
             .match(Messages.UpdateResponse.class, this::onUpdateResponse)
+            .match(Messages.Error.class, this::onError)
             .build();
     }  
 

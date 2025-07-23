@@ -12,12 +12,16 @@ import it.unitn.ds1.utils.OperationDelays.OperationType;
 
 public class Main {
 
+    private static ActorSystem system;
+    private static ActorRef client1, client2, client3;
+    private static TreeMap<Integer, ActorRef> testNodeRegistry;
+    private static ActorRef node1, node5, node7, node10, nodeSystem;
+
     // Helper method to print node contents with appropriate delay
     private static void printNodeContents(TreeMap<Integer, ActorRef> nodeRegistry) {
         System.out.println("=== NODE CONTENTS ===");
         for (Integer nodeId : nodeRegistry.keySet()) {
             ActorRef node = nodeRegistry.get(nodeId);
-            // Send a debug message to get node contents
             node.tell(new Messages.DebugPrintDataStore(), ActorRef.noSender());
         }
         try { 
@@ -37,207 +41,304 @@ public class Main {
             System.err.println("Thread interrupted during " + operationType + " delay");
         }
     }
-    
-    public static void main(String[] args) {
-        System.out.printf("Starting Distributed Storage System\n");
 
-        final ActorSystem system = ActorSystem.create("Distributed-Storage-System");
+    // Initialize the system and actors
+    private static void initializeSystem() {
+        System.out.println("Starting Distributed Storage System");
         
-        final ActorRef node1 = system.actorOf(
-            StorageNode.props(1),
-            "node-1"
-        );
+        system = ActorSystem.create("Distributed-Storage-System");
+        
+        node1 = system.actorOf(StorageNode.props(1), "node-1");
+        node5 = system.actorOf(StorageNode.props(5), "node-5");
+        node10 = system.actorOf(StorageNode.props(10), "node-10");
+        node7 = system.actorOf(StorageNode.props(7), "node-7");
+        nodeSystem = system.actorOf(StorageNode.props(-1), "Storage-Manager");
 
-        final ActorRef node5 = system.actorOf(
-            StorageNode.props(5),
-            "node-5"
-        );
-
-        final ActorRef node10 = system.actorOf(
-            StorageNode.props(10),
-            "node-10"
-        );
-
-        final ActorRef node7 = system.actorOf(
-            StorageNode.props(7),
-            "node-7"
-        );
-
-        final ActorRef nodeSystem = system.actorOf(
-            StorageNode.props(-1),
-            "Storage-Manager"
-        );
-
-        // For Testing we are going to make them know of each other
-        TreeMap<Integer, ActorRef> testNodeRegistry = new TreeMap<>();
+        testNodeRegistry = new TreeMap<>();
         testNodeRegistry.put(1, node1);
         testNodeRegistry.put(5, node5);
         testNodeRegistry.put(10, node10);
 
-        // Send the registry to both nodes
+        // Initialize node registries
         node1.tell(new Messages.UpdateNodeRegistry(testNodeRegistry, UpdateType.INIT), ActorRef.noSender());
         node5.tell(new Messages.UpdateNodeRegistry(testNodeRegistry, UpdateType.INIT), ActorRef.noSender());
         node10.tell(new Messages.UpdateNodeRegistry(testNodeRegistry, UpdateType.INIT), ActorRef.noSender());
 
-        // Small delay to ensure registry updates are processed
         sleepForOperation(OperationType.CRASH);
 
-        final ActorRef client = system.actorOf(
-            Client.props(),
-            "client-1"
-        );
+        // Create multiple clients
+        client1 = system.actorOf(Client.props(), "client-1");
+        client2 = system.actorOf(Client.props(), "client-2");
+        client3 = system.actorOf(Client.props(), "client-3");
+    }
 
-        // Store a value (client sends UpdateValueMsg to node)
-        System.out.println("=== Operation 1: Store key=1, value=Alluminium ===");
-        node1.tell(new Messages.ClientUpdate(1, "Alluminium"), client);
+    // Test basic CRUD operations
+    private static void testBasicOperations() {
+        System.out.println("\n========== TESTING BASIC CRUD OPERATIONS ==========");
+        
+        // Store values across different keys
+        System.out.println("=== Operation 1: Store key=1, value=Aluminum ===");
+        node1.tell(new Messages.ClientUpdate(1, "Aluminum"), client1);
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
-        
-        // Get a value (client sends GetValueMsg to node)
-        System.out.println("=== Operation 2: Get key=1 ===");
-        node1.tell(new Messages.ClientGet(1), client);
-        sleepForOperation(OperationType.CLIENT_GET);
-        printNodeContents(testNodeRegistry);
-
-        System.out.println("\n");
-        
-        // Store another value
-        System.out.println("=== Operation 3: Store key=6, value=Gold ===");
-        node1.tell(new Messages.ClientUpdate(6, "Gold"), client);
+        System.out.println("\n=== Operation 2: Store key=6, value=Gold ===");
+        node5.tell(new Messages.ClientUpdate(6, "Gold"), client1);
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
-        
-        // Get the second value
-        System.out.println("=== Operation 4: Get key=6 ===");
-        node1.tell(new Messages.ClientGet(6), client);
+        // Read the stored values
+        System.out.println("\n=== Operation 3: Get key=1 ===");
+        node10.tell(new Messages.ClientGet(1), client1);
         sleepForOperation(OperationType.CLIENT_GET);
-        printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
-        
+        System.out.println("\n=== Operation 4: Get key=6 ===");
+        node1.tell(new Messages.ClientGet(6), client1);
+        sleepForOperation(OperationType.CLIENT_GET);
+
         // Try to get a non-existent key
-        System.out.println("=== Operation 5: Get key=200 (non-existent) ===");
-        node1.tell(new Messages.ClientGet(200), client);
+        System.out.println("\n=== Operation 5: Get key=200 (non-existent) ===");
+        node5.tell(new Messages.ClientGet(200), client1);
+        sleepForOperation(OperationType.CLIENT_GET);
+        
+        printNodeContents(testNodeRegistry);
+    }
+
+    // Test multiple clients accessing same/different coordinators
+    private static void testMultiClientOperations() {
+        System.out.println("\n========== TESTING MULTI-CLIENT OPERATIONS ==========");
+        
+        // Multiple clients accessing same coordinator
+        System.out.println("=== Operation 6: Multiple clients via same coordinator (Node 1) ===");
+        node1.tell(new Messages.ClientUpdate(2, "Silver"), client1);
+        node1.tell(new Messages.ClientUpdate(3, "Bronze"), client2);
+        node1.tell(new Messages.ClientGet(1), client3);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
+        printNodeContents(testNodeRegistry);
+
+        // Multiple clients accessing different coordinators for same key
+        System.out.println("\n=== Operation 7: Multiple clients via different coordinators (same key=1) ===");
+        node1.tell(new Messages.ClientGet(1), client1);
+        node5.tell(new Messages.ClientGet(1), client2);
+        node10.tell(new Messages.ClientUpdate(1, "Platinum"), client3);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
+        printNodeContents(testNodeRegistry);
+
+        // Multiple clients accessing different coordinators for different keys
+        System.out.println("\n=== Operation 8: Multiple clients via different coordinators (different keys) ===");
+        node1.tell(new Messages.ClientUpdate(4, "Copper"), client1);
+        node5.tell(new Messages.ClientUpdate(8, "Iron"), client2);
+        node10.tell(new Messages.ClientUpdate(12, "Zinc"), client3);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
+        printNodeContents(testNodeRegistry);
+    }
+
+    // Test operations with crashed nodes to verify quorum behavior
+    private static void testQuorumWithCrashedNodes() {
+        System.out.println("\n========== TESTING QUORUM WITH CRASHED NODES ==========");
+        
+        // First, ensure we have data distributed
+        System.out.println("=== Setup: Store data across the system ===");
+        node1.tell(new Messages.ClientUpdate(15, "TestData1"), client1);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
+        
+        // Crash one node and test read quorum
+        System.out.println("\n=== Operation 9: Crash Node 10 and test read quorum ===");
+        node10.tell(new Messages.Crash(), nodeSystem);
+        sleepForOperation(OperationType.CRASH);
+        
+        // Try to read - should still work if quorum is available
+        node1.tell(new Messages.ClientGet(15), client1);
         sleepForOperation(OperationType.CLIENT_GET);
         printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
-
-        // Try to update a local value
-        System.out.println("=== Operation 6: Update key=1 value=Silver ===");
-        node1.tell(new Messages.ClientUpdate(1, "Silver"), client);
+        // Try to write - should still work if write quorum is available
+        System.out.println("\n=== Operation 10: Update with one node crashed ===");
+        node5.tell(new Messages.ClientUpdate(15, "TestData1Updated"), client1);
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
-
-        System.out.println("=== Operation 6.5: Update key=1 value=LOL ===");
-        node1.tell(new Messages.ClientUpdate(1, "LOL"), client);
-        sleepForOperation(OperationType.CLIENT_UPDATE);
-        printNodeContents(testNodeRegistry);
-
-        System.out.println("\n");
-
-        // Try to update a remote value
-        System.out.println("=== Operation 7: Update key=6 value=Sapphire ===");
-        node1.tell(new Messages.ClientUpdate(6, "Sapphire"), client);
-        sleepForOperation(OperationType.CLIENT_UPDATE);
-        printNodeContents(testNodeRegistry);
-
-        System.out.println("\n");
-
-        // Try to update a remote value
-        System.out.println("=== Operation 8: Update key=9 value=Diamond ===");
-        node1.tell(new Messages.ClientUpdate(9, "Diamond"), client);
-        sleepForOperation(OperationType.CLIENT_UPDATE);
-        printNodeContents(testNodeRegistry);
-
-        System.out.println("\n");
-
-        // Try to update a remote value
-        System.out.println("=== Operation 9: Update key=9 value=Diamonds ===");
-        node1.tell(new Messages.ClientUpdate(9, "Diamonds"), client);
-        sleepForOperation(OperationType.CLIENT_UPDATE);
-        printNodeContents(testNodeRegistry);
-
-        System.out.println("\n");
-
-        // Try to read a remote value
-        System.out.println("=== Operation 10: Get key=9 ===");
-        node1.tell(new Messages.ClientGet(9), client);
+        // Crash another node - test if system still works
+        System.out.println("\n=== Operation 11: Crash Node 5, test with 2 nodes down ===");
+        node5.tell(new Messages.Crash(), nodeSystem);
+        sleepForOperation(OperationType.CRASH);
+        
+        // This might fail depending on quorum requirements
+        node1.tell(new Messages.ClientGet(15), client1);
         sleepForOperation(OperationType.CLIENT_GET);
         printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
+        // Recover one node
+        System.out.println("\n=== Operation 12: Recover Node 10 ===");
+        node10.tell(new Messages.Recovery(node1), nodeSystem);
+        sleepForOperation(OperationType.RECOVERY);
+        printNodeContents(testNodeRegistry);
+    }
 
-        System.out.println("=== Operation 11: Join Node 7 ===");
+    // Test join/leave operations with system under load
+    private static void testMembershipUnderLoad() {
+        System.out.println("\n========== TESTING MEMBERSHIP UNDER LOAD ==========");
+        
+        // Add Node 7 while system is handling operations
+        System.out.println("=== Operation 13: Join Node 7 while handling client requests ===");
         node7.tell(new Messages.Join(node1), nodeSystem);
+        
+        // Immediately start client operations
+        node1.tell(new Messages.ClientUpdate(20, "ConcurrentData1"), client1);
+        node1.tell(new Messages.ClientUpdate(21, "ConcurrentData2"), client2);
+        
         sleepForOperation(OperationType.JOIN);
-        // Update registry to include node7 for printing
         testNodeRegistry.put(7, node7);
         printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
-
-        System.out.println("=== Operation 12: Update key=6 value=Emeralds ===");
-        node1.tell(new Messages.ClientUpdate(6, "Emeralds"), client);
-        sleepForOperation(OperationType.CLIENT_UPDATE);
+        // Recover Node 5 while handling operations
+        System.out.println("\n=== Operation 14: Recover Node 5 while handling requests ===");
+        node5.tell(new Messages.Recovery(node7), nodeSystem);
+        
+        // Concurrent operations during recovery
+        node7.tell(new Messages.ClientGet(20), client1);
+        node1.tell(new Messages.ClientUpdate(22, "RecoveryData"), client3);
+        
+        sleepForOperation(OperationType.RECOVERY);
         printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
-
-        // Just for testing, need to change coordinator on Client
-        System.out.println("=== Operation 13: Node 7 crashes ===");
-        node7.tell(new Messages.Crash(), nodeSystem);
-        sleepForOperation(OperationType.CRASH);
-        printNodeContents(testNodeRegistry);
-
-        System.out.println("\n");
-
-        // Just for testing, need to change coordinator on Client
-        System.out.println("=== Operation 14: Node 1 leaves ===");
+        // Test leave operation under load
+        System.out.println("\n=== Operation 15: Node 1 leaves while handling requests ===");
         node1.tell(new Messages.Leave(), nodeSystem);
+        
+        // Operations during leave
+        node5.tell(new Messages.ClientGet(21), client1);
+        node7.tell(new Messages.ClientGet(22), client2);
+        
         sleepForOperation(OperationType.LEAVE);
         testNodeRegistry.remove(1);
         printNodeContents(testNodeRegistry);
+    }
 
-        System.out.println("\n");
-
-        // Just for testing, need to change coordinator on Client
-        System.out.println("=== Operation 15: Node 7 Recovers ===");
-        node7.tell(new Messages.Recovery(node10), nodeSystem);
-        sleepForOperation(OperationType.RECOVERY);
+    // Test concurrent operations and race conditions
+    private static void testConcurrencyAndRaceConditions() {
+        System.out.println("\n========== TESTING CONCURRENCY AND RACE CONDITIONS ==========");
+        
+        // Concurrent updates to same key from different coordinators
+        System.out.println("=== Operation 16: Concurrent updates to same key from different coordinators ===");
+        node5.tell(new Messages.ClientUpdate(25, "Version1"), client1);
+        node7.tell(new Messages.ClientUpdate(25, "Version2"), client2);
+        node10.tell(new Messages.ClientUpdate(25, "Version3"), client3);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
+        // Concurrent read-write operations
+        System.out.println("\n=== Operation 17: Concurrent read-write to same key ===");
+        node5.tell(new Messages.ClientGet(25), client1);
+        node7.tell(new Messages.ClientUpdate(25, "ReadWriteTest"), client2);
+        node10.tell(new Messages.ClientGet(25), client3);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
+        printNodeContents(testNodeRegistry);
 
-        System.out.println("=== Operation 16: Node 7 crashes ===");
+        // Sequential updates to test versioning
+        System.out.println("\n=== Operation 18: Sequential updates to test versioning ===");
+        node5.tell(new Messages.ClientUpdate(26, "V1"), client1);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
+        
+        node7.tell(new Messages.ClientUpdate(26, "V2"), client2);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
+        
+        node10.tell(new Messages.ClientUpdate(26, "V3"), client3);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
+        printNodeContents(testNodeRegistry);
+    }
+
+    // Test error scenarios and edge cases
+    private static void testErrorScenarios() {
+        System.out.println("\n========== TESTING ERROR SCENARIOS ==========");
+        
+        // Test operations on crashed coordinator
+        System.out.println("=== Operation 19: Operations on crashed coordinator ===");
         node7.tell(new Messages.Crash(), nodeSystem);
         sleepForOperation(OperationType.CRASH);
+        
+        // Try to use crashed node as coordinator
+        node7.tell(new Messages.ClientGet(25), client1);
+        sleepForOperation(OperationType.CLIENT_GET);
+        
+        // Test timeout scenarios (if implemented)
+        System.out.println("\n=== Operation 20: Test timeout scenarios ===");
+        // Operations that might timeout due to insufficient nodes
         printNodeContents(testNodeRegistry);
-
-        System.out.println("\n");
-
-        // Just for testing, need to change coordinator on Client
-        System.out.println("=== Operation 17: Node 1 Joins ===");
-        node1.tell(new Messages.Join(node10), nodeSystem);
+        
+        // Test double join attempt
+        System.out.println("\n=== Operation 21: Test double join attempt ===");
+        node1.tell(new Messages.Join(node5), nodeSystem);
+        sleepForOperation(OperationType.JOIN);
+        // Try to join again
+        node1.tell(new Messages.Join(node5), nodeSystem);
         sleepForOperation(OperationType.JOIN);
         testNodeRegistry.put(1, node1);
         printNodeContents(testNodeRegistry);
+    }
 
-        System.out.println("\n");
-
-        System.out.println("=== Operation 18: Node 7 Recovers ===");
-        node7.tell(new Messages.Recovery(node10), nodeSystem);
-        sleepForOperation(OperationType.RECOVERY);
+    // Test system resilience and recovery scenarios
+    private static void testSystemResilience() {
+        System.out.println("\n========== TESTING SYSTEM RESILIENCE ==========");
+        
+        // Test cascading failures
+        System.out.println("=== Operation 22: Test cascading node failures ===");
+        node5.tell(new Messages.Crash(), nodeSystem);
+        sleepForOperation(OperationType.CRASH);
+        
+        node10.tell(new Messages.Crash(), nodeSystem);
+        sleepForOperation(OperationType.CRASH);
+        
+        // Try operations with minimal nodes
+        node1.tell(new Messages.ClientGet(26), client1);
+        sleepForOperation(OperationType.CLIENT_GET);
         printNodeContents(testNodeRegistry);
 
-        System.out.println("\n");
-        System.out.println("=== All operations completed ===");
+        // Test system recovery
+        System.out.println("\n=== Operation 23: Test system recovery ===");
+        node5.tell(new Messages.Recovery(node1), nodeSystem);
+        sleepForOperation(OperationType.RECOVERY);
+        
+        node10.tell(new Messages.Recovery(node1), nodeSystem);
+        sleepForOperation(OperationType.RECOVERY);
+        
+        node7.tell(new Messages.Recovery(node1), nodeSystem);
+        sleepForOperation(OperationType.RECOVERY);
+        
+        printNodeContents(testNodeRegistry);
+
+        // Test data consistency after recovery
+        System.out.println("\n=== Operation 24: Test data consistency after recovery ===");
+        node5.tell(new Messages.ClientGet(25), client1);
+        node10.tell(new Messages.ClientGet(26), client2);
+        sleepForOperation(OperationType.CLIENT_GET);
+        printNodeContents(testNodeRegistry);
+    }
+
+    public static void main(String[] args) {
+        try {
+            initializeSystem();
             
+            // Run test suites in logical order
+            testBasicOperations();
+            testMultiClientOperations();
+            testQuorumWithCrashedNodes();
+            testMembershipUnderLoad();
+            testConcurrencyAndRaceConditions();
+            testErrorScenarios();
+            testSystemResilience();
+            
+            System.out.println("\n=== All tests completed ===");
+            
+        } catch (Exception e) {
+            System.err.println("Test execution failed: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            // Clean shutdown
+            if (system != null) {
+                System.out.println("Shutting down system...");
+                system.terminate();
+            }
+        }
     }
 }

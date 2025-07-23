@@ -12,7 +12,7 @@ import it.unitn.ds1.utils.OperationDelays.OperationType;
 
 public class Messages {
 
-    public static final int DELAY = 950;
+    public static final int DELAY = 450;
 
     // Debug message to print the contents of a node's data store
     public static class DebugPrintDataStore implements Serializable {}
@@ -62,11 +62,15 @@ public class Messages {
 
     public static class Leave implements Serializable {}
 
-    public static class NotifyLeave implements Serializable {
+    public static class NotifyLeave implements Serializable {}
+
+    public static class LeaveACK implements Serializable {}
+
+    public static class RepartitionData implements Serializable {
         public final int leavingId;
         public final Map<Integer, VersionedValue> items;
 
-        public NotifyLeave(int leavingId, Map<Integer, VersionedValue> items) {
+        public RepartitionData(int leavingId, Map<Integer, VersionedValue> items) {
             this.leavingId = leavingId;
             this.items = items;
         }
@@ -178,6 +182,18 @@ public class Messages {
             this.announcingId = announcingId;
         }
 
+    }
+
+    public static class Error implements Serializable {
+        public final int key;
+        public final String operationId;
+        public final OperationType operationType;
+
+        public Error(int key, String operationId, OperationType operationType) {
+            this.key = key;
+            this.operationId = operationId;
+            this.operationType = operationType;
+        }
     }
 
 
