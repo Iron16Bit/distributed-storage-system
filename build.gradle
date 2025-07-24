@@ -22,7 +22,8 @@ dependencies {
 compileJava {
     options.compilerArgs += ["-Xlint:deprecation"]
 }
-mainClassName = "it.unitn.ds1.Main"
+mainClassName = "it.unitn.ds1.LargeScaleTest"
+// mainClassName = "it.unitn.ds1.Main"
 
 run {
     standardInput = System.in

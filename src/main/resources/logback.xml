@@ -6,11 +6,11 @@
         </encoder>
     </appender>
     
-    <logger name="it.unitn.ds1.actors.StorageNode" level="DEBUG"/>
-    <logger name="it.unitn.ds1.Main" level="DEBUG"/>
-    <logger name="it.unitn.ds1.actors.Client" level="DEBUG" />
+    <logger name="it.unitn.ds1.actors.StorageNode" level="INFO"/>
+    <logger name="it.unitn.ds1.Main" level="INFO"/>
+    <logger name="it.unitn.ds1.actors.Client" level="INFO" />
     
-    <root level="DEBUG">
+    <root level="INFO">
         <appender-ref ref="STDOUT"/>
     </root>
 </configuration>

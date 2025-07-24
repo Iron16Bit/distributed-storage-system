@@ -133,7 +133,7 @@ public class StorageNode extends AbstractActor {
         return receiveBuilder()
             .match(Messages.Join.class, this::onJoin)
             .match(Messages.UpdateNodeRegistry.class, this::onUpdateNodeRegistry)
-            .matchAny(_ -> logger.debug("Node {} - Ignoring message in initialSpawn state", this.id))
+            .matchAny(msg -> logger.debug("Node {} - Ignoring message in initialSpawn state", this.id))
             .build();
     }
 
@@ -165,7 +165,7 @@ public class StorageNode extends AbstractActor {
     public Receive crashed() {
         return receiveBuilder()
             .match(Messages.Recovery.class, this::onRecovery)
-            .matchAny(_ -> logger.debug("Node {} - Ignoring message while crashed", this.id))
+            .matchAny(msg -> logger.debug("Node {} - Ignoring message while crashed", this.id))
             .build();
     }
 
@@ -563,7 +563,7 @@ public class StorageNode extends AbstractActor {
         
         String operationId = generateOperationId(msg.key);
 
-        if (isLocked(msg.key, OpType.UPDATE)) {
+        if (isLocked(msg.key, OpType.GET)) {
             logger.warn("Node {} - GET rejected: key {} is locked for update at coordinator level", this.id, msg.key);
             scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_GET));
             return;
