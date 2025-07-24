@@ -25,7 +25,8 @@ public class LargeScaleTest {
     private static TreeMap<Integer, ActorRef> nodeRegistry;
     private static List<ActorRef> allNodes;
     private static List<ActorRef> clients;
-    
+    private static List<Integer> crashedNodeIds = new ArrayList<>();
+
     // Configuration
     private static final int INITIAL_NODES = 10;
     private static final int JOINING_NODES = 20;
@@ -62,8 +63,8 @@ public class LargeScaleTest {
     // Initialize the system with initial nodes
     private static void initializeSystem() {
         logger.info("Starting Large Scale Distributed Storage System Test");
-        logger.info("Initial nodes: {}, Joining nodes: {}, Total clients: {}", 
-                   INITIAL_NODES, JOINING_NODES, TOTAL_CLIENTS);
+        logger.info("Initial nodes: {}, Joining nodes: {}, Total clients: {}",
+                INITIAL_NODES, JOINING_NODES, TOTAL_CLIENTS);
 
         system = ActorSystem.create("Large-Scale-Storage-System");
         nodeRegistry = new TreeMap<>();
@@ -76,7 +77,7 @@ public class LargeScaleTest {
             int nodeId = i * 10; // Node IDs: 10, 20, 30, 40, ...
             ActorRef node = system.actorOf(StorageNode.props(nodeId), "node-" + nodeId);
             allNodes.add(node);
-            
+
             // Add first 10 nodes to initial registry
             if (i <= INITIAL_NODES) {
                 nodeRegistry.put(nodeId, node);
@@ -98,16 +99,29 @@ public class LargeScaleTest {
             clients.add(client);
         }
 
-        logger.info("System initialization completed with {} nodes and {} clients", 
-                   nodeRegistry.size(), clients.size());
+        logger.info("System initialization completed with {} nodes and {} clients",
+                nodeRegistry.size(), clients.size());
         logger.info("\n");
     }
 
-    // Helper method to get a random node from active registry
+    // Helper method to get a random active node (not crashed)
     private static ActorRef getRandomNode() {
-        List<ActorRef> nodes = new ArrayList<>(nodeRegistry.values());
-        int randomIndex = (int) (Math.random() * nodes.size());
-        return nodes.get(randomIndex);
+        List<ActorRef> activeNodes = new ArrayList<>();
+
+        // Only include non-crashed nodes
+        for (Map.Entry<Integer, ActorRef> entry : nodeRegistry.entrySet()) {
+            if (!crashedNodeIds.contains(entry.getKey())) {
+                activeNodes.add(entry.getValue());
+            }
+        }
+
+        if (activeNodes.isEmpty()) {
+            logger.error("No active nodes available!");
+            return null;
+        }
+
+        int randomIndex = (int) (Math.random() * activeNodes.size());
+        return activeNodes.get(randomIndex);
     }
 
     // Helper method to get a random client
@@ -126,6 +140,17 @@ public class LargeScaleTest {
         return -1; // Unknown node
     }
 
+    // Helper method to get a unique client for concurrent operations
+    private static ActorRef getUniqueClient(int operationIndex) {
+        // Create additional clients if needed for concurrency
+        while (clients.size() <= operationIndex) {
+            ActorRef newClient = system.actorOf(Client.props(), "client-" + (clients.size() + 1));
+            clients.add(newClient);
+            logger.debug("Created additional client: client-{}", clients.size());
+        }
+        return clients.get(operationIndex);
+    }
+
     // Test initial operations with 10 nodes
     private static void testInitialOperations() {
         logger.info("========== TESTING INITIAL OPERATIONS ({} nodes) ==========", nodeRegistry.size());
@@ -133,15 +158,25 @@ public class LargeScaleTest {
         // Populate some initial data
         for (int i = 0; i < 15; i++) {
             ActorRef randomNode = getRandomNode();
-            ActorRef randomClient = getRandomClient();
+            if (randomNode == null) {
+                logger.warn("No active nodes available for initial operation {}", i);
+                continue;
+            }
+
+            ActorRef uniqueClient = getUniqueClient(i); // Use unique client for each operation
             int key = 100 + i;
             String value = "InitialValue" + i;
 
-            logger.info("Initial data: Node {} storing key {} = {}", getNodeId(randomNode), key, value);
-            randomNode.tell(new Messages.ClientUpdate(key, value), randomClient);
-            
+            logger.info("Initial data: Node {} storing key {} = {} (client-{})",
+                    getNodeId(randomNode), key, value, (i + 1));
+            randomNode.tell(new Messages.ClientUpdate(key, value), uniqueClient);
+
             // Small delay between operations
-            try { Thread.sleep(100); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         sleepForOperation(OperationType.CLIENT_UPDATE);
@@ -153,7 +188,7 @@ public class LargeScaleTest {
         logger.info("========== ADDING {} NODES GRADUALLY ==========", JOINING_NODES);
 
         int currentNodeIndex = INITIAL_NODES;
-        
+
         for (int wave = 1; wave <= 4; wave++) {
             int nodesInThisWave = Math.min(5, JOINING_NODES - (wave - 1) * 5);
             logger.info("=== Wave {}: Adding {} nodes ===", wave, nodesInThisWave);
@@ -161,23 +196,23 @@ public class LargeScaleTest {
             for (int i = 0; i < nodesInThisWave && currentNodeIndex < allNodes.size(); i++) {
                 ActorRef newNode = allNodes.get(currentNodeIndex);
                 int newNodeId = (currentNodeIndex + 1) * 10;
-                
+
                 // Choose a random existing node as bootstrap peer
                 ActorRef bootstrapPeer = getRandomNode();
-                
-                logger.info("Node {} joining network via bootstrap peer {}", 
-                           newNodeId, getNodeId(bootstrapPeer));
-                
+
+                logger.info("Node {} joining network via bootstrap peer {}",
+                        newNodeId, getNodeId(bootstrapPeer));
+
                 newNode.tell(new Messages.Join(bootstrapPeer), ActorRef.noSender());
                 nodeRegistry.put(newNodeId, newNode);
-                
+
                 sleepForOperation(OperationType.JOIN);
                 currentNodeIndex++;
-                
+
                 // Perform some operations after each join
                 performRandomOperations(3, "post-join-" + newNodeId);
             }
-            
+
             logger.info("Wave {} completed. Total active nodes: {}", wave, nodeRegistry.size());
             printNodeContents();
         }
@@ -189,30 +224,39 @@ public class LargeScaleTest {
 
         for (int i = 0; i < numOperations; i++) {
             ActorRef randomNode = getRandomNode();
-            ActorRef randomClient = getRandomClient();
-            
+            if (randomNode == null) {
+                logger.warn("No active nodes available for operation {}", i);
+                continue;
+            }
+
+            ActorRef uniqueClient = getUniqueClient(i); // Use unique client for each operation
+
             // Mix of different key ranges to test distribution
             int keyRange = (int) (Math.random() * 3);
             int key = switch (keyRange) {
-                case 0 -> 200 + (int) (Math.random() * 50);  // Range 200-249
-                case 1 -> 500 + (int) (Math.random() * 50);  // Range 500-549  
-                case 2 -> 800 + (int) (Math.random() * 50);  // Range 800-849
+                case 0 -> 200 + (int) (Math.random() * 50); // Range 200-249
+                case 1 -> 500 + (int) (Math.random() * 50); // Range 500-549
+                case 2 -> 800 + (int) (Math.random() * 50); // Range 800-849
                 default -> 200;
             };
 
             if (Math.random() > 0.3) { // 70% UPDATE, 30% GET
                 String value = phase + "-Value" + i;
-                logger.info("{}: Node {} UPDATE key {} = {}", 
-                           phase, getNodeId(randomNode), key, value);
-                randomNode.tell(new Messages.ClientUpdate(key, value), randomClient);
+                logger.info("{}: Node {} UPDATE key {} = {} (client-{})",
+                        phase, getNodeId(randomNode), key, value, (i + 1));
+                randomNode.tell(new Messages.ClientUpdate(key, value), uniqueClient);
             } else {
-                logger.info("{}: Node {} GET key {}", 
-                           phase, getNodeId(randomNode), key);
-                randomNode.tell(new Messages.ClientGet(key), randomClient);
+                logger.info("{}: Node {} GET key {} (client-{})",
+                        phase, getNodeId(randomNode), key, (i + 1));
+                randomNode.tell(new Messages.ClientGet(key), uniqueClient);
             }
-            
+
             // Small delay between operations to avoid overwhelming
-            try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         sleepForOperation(OperationType.CLIENT_UPDATE);
@@ -224,31 +268,36 @@ public class LargeScaleTest {
 
         // Phase 1: Concurrent operations on same keys
         logger.info("=== Phase 1: Concurrent operations on same keys ===");
-        int[] hotKeys = {1000, 1001, 1002, 1003, 1004};
-        
+        int[] hotKeys = { 1000, 1001, 1002, 1003, 1004 };
+
         for (int i = 0; i < 25; i++) {
             ActorRef randomNode = getRandomNode();
-            ActorRef randomClient = getRandomClient();
+            if (randomNode == null) {
+                logger.warn("No active nodes available for concurrent operation {}", i);
+                continue;
+            }
+
+            ActorRef uniqueClient = getUniqueClient(i); // Each concurrent operation gets unique client
             int hotKey = hotKeys[i % hotKeys.length];
-            
+
             if (Math.random() > 0.4) {
                 String value = "ConcurrentValue" + i;
-                logger.info("Concurrent: Node {} UPDATE hot key {} = {}", 
-                           getNodeId(randomNode), hotKey, value);
-                randomNode.tell(new Messages.ClientUpdate(hotKey, value), randomClient);
+                logger.info("Concurrent: Node {} UPDATE hot key {} = {} (client-{})",
+                        getNodeId(randomNode), hotKey, value, (i + 1));
+                randomNode.tell(new Messages.ClientUpdate(hotKey, value), uniqueClient);
             } else {
-                logger.info("Concurrent: Node {} GET hot key {}", 
-                           getNodeId(randomNode), hotKey);
-                randomNode.tell(new Messages.ClientGet(hotKey), randomClient);
+                logger.info("Concurrent: Node {} GET hot key {} (client-{})",
+                        getNodeId(randomNode), hotKey, (i + 1));
+                randomNode.tell(new Messages.ClientGet(hotKey), uniqueClient);
             }
         }
-        
+
         sleepForOperation(OperationType.CLIENT_UPDATE);
 
         // Phase 2: Distributed operations across key space
         logger.info("=== Phase 2: Distributed operations across key space ===");
         performRandomOperations(OPERATIONS_PER_PHASE, "distributed-load");
-        
+
         printNodeContents();
     }
 
@@ -258,20 +307,24 @@ public class LargeScaleTest {
 
         // Crash a few random nodes
         List<ActorRef> crashedNodes = new ArrayList<>();
-        List<Integer> crashedNodeIds = new ArrayList<>();
-        
+
         int nodesToCrash = Math.min(5, nodeRegistry.size() / 4);
         logger.info("=== Crashing {} random nodes ===", nodesToCrash);
-        
+
         for (int i = 0; i < nodesToCrash; i++) {
             ActorRef randomNode = getRandomNode();
+            if (randomNode == null) {
+                logger.warn("No active nodes available to crash");
+                break;
+            }
+
             Integer nodeId = getNodeId(randomNode);
-            
+
             if (!crashedNodeIds.contains(nodeId)) {
                 logger.info("Crashing node {}", nodeId);
                 randomNode.tell(new Messages.Crash(), ActorRef.noSender());
                 crashedNodes.add(randomNode);
-                crashedNodeIds.add(nodeId);
+                crashedNodeIds.add(nodeId); // Track crashed node
                 sleepForOperation(OperationType.CRASH);
             }
         }
@@ -283,14 +336,17 @@ public class LargeScaleTest {
         // Recover some nodes
         logger.info("=== Recovering crashed nodes ===");
         ActorRef recoveryPeer = getRandomNode();
-        
-        for (int i = 0; i < Math.min(3, crashedNodes.size()); i++) {
-            ActorRef crashedNode = crashedNodes.get(i);
-            Integer nodeId = crashedNodeIds.get(i);
-            
-            logger.info("Recovering node {} via peer {}", nodeId, getNodeId(recoveryPeer));
-            crashedNode.tell(new Messages.Recovery(recoveryPeer), ActorRef.noSender());
-            sleepForOperation(OperationType.RECOVERY);
+
+        if (recoveryPeer != null) {
+            for (int i = 0; i < Math.min(3, crashedNodes.size()); i++) {
+                ActorRef crashedNode = crashedNodes.get(i);
+                Integer nodeId = getNodeId(crashedNode);
+
+                logger.info("Recovering node {} via peer {}", nodeId, getNodeId(recoveryPeer));
+                crashedNode.tell(new Messages.Recovery(recoveryPeer), ActorRef.noSender());
+                crashedNodeIds.remove(nodeId); // Remove from crashed list
+                sleepForOperation(OperationType.RECOVERY);
+            }
         }
 
         // Final operations after recovery
@@ -306,17 +362,18 @@ public class LargeScaleTest {
         logger.info("=== Removing {} nodes gracefully ===", nodesToRemove);
 
         List<Integer> removedNodeIds = new ArrayList<>();
-        
+
         for (int i = 0; i < nodesToRemove; i++) {
-            if (nodeRegistry.size() <= 3) break; // Keep minimum nodes
-            
+            if (nodeRegistry.size() <= 3)
+                break; // Keep minimum nodes
+
             ActorRef randomNode = getRandomNode();
             Integer nodeId = getNodeId(randomNode);
-            
+
             logger.info("Node {} leaving the network", nodeId);
             randomNode.tell(new Messages.Leave(), ActorRef.noSender());
             sleepForOperation(OperationType.LEAVE);
-            
+
             nodeRegistry.remove(nodeId);
             removedNodeIds.add(nodeId);
         }
@@ -324,7 +381,7 @@ public class LargeScaleTest {
         // Operations after departures
         performRandomOperations(20, "post-departure");
         printNodeContents();
-        
+
         logger.info("Final network size: {} nodes", nodeRegistry.size());
     }
 
@@ -333,32 +390,36 @@ public class LargeScaleTest {
             initializeSystem();
 
             logger.info("Starting large-scale test suite...");
-            
+
             // Test with initial 10 nodes
             testInitialOperations();
-            
+
             // Gradually add 20 more nodes
             addNodesGradually();
-            
+
             // Test massive concurrency with all nodes
             testMassiveConcurrency();
-            
+
             // Test system resilience
             testSystemResilience();
-            
+
             // Test node departures
             testNodeDepartures();
 
             logger.info("Large-scale test completed successfully!");
-            logger.info("Final statistics: {} active nodes, {} total operations performed", 
-                       nodeRegistry.size(), OPERATIONS_PER_PHASE * 4 + 100);
+            logger.info("Final statistics: {} active nodes, {} total operations performed",
+                    nodeRegistry.size(), OPERATIONS_PER_PHASE * 4 + 100);
 
         } catch (Exception e) {
             logger.error("Large-scale test execution failed", e);
         } finally {
             if (system != null) {
                 logger.info("Shutting down system...");
-                try { Thread.sleep(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
                 system.terminate();
             }
         }
