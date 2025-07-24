@@ -1,4 +1,4 @@
-package it.unitn.ds1;
+package it.unitn.ds1.test;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -10,7 +10,7 @@ import org.slf4j.LoggerFactory;
 
 import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
-
+import it.unitn.ds1.Messages;
 import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.StorageNode;
 import it.unitn.ds1.types.UpdateType;
