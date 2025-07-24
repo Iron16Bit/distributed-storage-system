@@ -62,7 +62,6 @@ public class StorageNode extends AbstractActor {
         final int key;
         final ActorRef client;
         final List<VersionedValue> responses;
-        final long startTime;
         final String updateValue;
         final GetType getType;
 
@@ -70,7 +69,6 @@ public class StorageNode extends AbstractActor {
             this.key = key;
             this.client = client;
             this.responses = new ArrayList<>();
-            this.startTime = System.currentTimeMillis();
             this.updateValue = null;
             this.getType = getType;
         }
@@ -79,7 +77,6 @@ public class StorageNode extends AbstractActor {
             this.key = key;
             this.client = client;
             this.responses = new ArrayList<>();
-            this.startTime = System.currentTimeMillis();
             this.updateValue = updateValue;
             this.getType = GetType.UPDATE;
         }
@@ -89,13 +86,11 @@ public class StorageNode extends AbstractActor {
         final int key;
         final ActorRef client;
         final List<VersionedValue> responses;
-        final long startTime;
 
         UpdateOperation(int key, ActorRef client) {
             this.key = key;
             this.client = client;
             this.responses = new ArrayList<>();
-            this.startTime = System.currentTimeMillis();
         }
     }
 
