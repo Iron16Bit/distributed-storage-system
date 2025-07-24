@@ -15,7 +15,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.concurrent.duration.Duration;
 
 import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
@@ -29,40 +28,44 @@ import it.unitn.ds1.utils.TimeoutDelay;
 import it.unitn.ds1.utils.VersionedValue;
 import it.unitn.ds1.utils.OperationDelays.OperationType;
 
-interface DataService {
-  VersionedValue updateWithCurrentValue(int key, String value, VersionedValue currentValue);
-  VersionedValue get(int key);
-}
-
-public class StorageNode extends AbstractActor implements DataService {
+/**
+ * Storage node implementation for the distributed key-value storage system.
+ * Handles data storage, replication, and coordination of distributed operations.
+ */
+public class StorageNode extends AbstractActor {
     
+    private static final Logger logger = LoggerFactory.getLogger(StorageNode.class);
+    
+    // Node identification and randomization
     private final Integer id;
     private final Random random;
 
-    private SortedMap<Integer,VersionedValue> dataStore = new TreeMap<>();
-    private SortedMap<Integer, ActorRef> nodeRegistry = new TreeMap<>();
-    private Map<String, GetOperation> pendingGet = new HashMap<>();
-    private Map<String, UpdateOperation> pendingUpdate = new HashMap<>();
+    // Core data structures
+    private final SortedMap<Integer, VersionedValue> dataStore = new TreeMap<>();
+    private final SortedMap<Integer, ActorRef> nodeRegistry = new TreeMap<>();
+    
+    // Operation tracking
+    private final Map<String, GetOperation> pendingGet = new HashMap<>();
+    private final Map<String, UpdateOperation> pendingUpdate = new HashMap<>();
     private int operationCounter = 0;
 
-    // created through lack of efficient ideas
-    private Map<Integer, Set<String>> keylocks = new HashMap<>();
-    private Map<Integer, OpType> keyLockTypes = new HashMap<>();
+    // Locking mechanism
+    private final Map<Integer, Set<String>> keylocks = new HashMap<>();
+    private final Map<Integer, OpType> keyLockTypes = new HashMap<>();
 
-    private static final Logger logger = LoggerFactory.getLogger(StorageNode.class);
-
-
+    // Leave operation state
     private LeaveOperation leaveOperation;
+
+    // ===== NESTED CLASSES =====
 
     private static class GetOperation {
         final int key;
         final ActorRef client;
         final List<VersionedValue> responses;
         final long startTime;
-        final String updateValue; // Add this field
+        final String updateValue;
         final GetType getType;
 
-        // Constructor for regular get operations
         GetOperation(int key, ActorRef client, GetType getType) {
             this.key = key;
             this.client = client;
@@ -72,7 +75,6 @@ public class StorageNode extends AbstractActor implements DataService {
             this.getType = getType;
         }
 
-        // Constructor for read-before-update operations
         GetOperation(int key, ActorRef client, String updateValue) {
             this.key = key;
             this.client = client;
@@ -82,7 +84,6 @@ public class StorageNode extends AbstractActor implements DataService {
             this.getType = GetType.UPDATE;
         }
     }
-
 
     private static class UpdateOperation {
         final int key;
@@ -107,106 +108,164 @@ public class StorageNode extends AbstractActor implements DataService {
         }
     }
 
-
-    //--Constructor--
-    //TODO coordinator needs to be handled differently
+    // ===== CONSTRUCTOR =====
+    
     public StorageNode(int id) {
         this.id = id;
         this.random = new Random(id);
     }
 
-    //--Getters and Setters--
-    public Integer getID() {
-        return id;
-    }
-
-    public SortedMap<Integer, VersionedValue> getDataStore() {
-        return dataStore;
-    }
-
-    public void setDataStore(SortedMap<Integer, VersionedValue> dataStore) {
-        this.dataStore = dataStore;
-    }
+    // ===== AKKA LIFECYCLE =====
     
-    public SortedMap<Integer,ActorRef> getNodesAlive() {
-        return nodeRegistry;
+    public static Props props(int id) {
+        return Props.create(StorageNode.class, () -> new StorageNode(id));
     }
 
-    public void setNodeRegistry(SortedMap<Integer,ActorRef> nodeRegistry) {
-        this.nodeRegistry = nodeRegistry;
+    @Override
+    public void preStart() throws Exception {
+        super.preStart();
+        getContext().become(initialSpawn());
     }
 
+    // ===== BEHAVIOR DEFINITIONS =====
+    
+    public Receive initialSpawn() {
+        return receiveBuilder()
+            .match(Messages.Join.class, this::onJoin)
+            .match(Messages.UpdateNodeRegistry.class, this::onUpdateNodeRegistry)
+            .matchAny(_ -> logger.debug("Node {} - Ignoring message in initialSpawn state", this.id))
+            .build();
+    }
+
+    @Override
+    public Receive createReceive() {
+        return receiveBuilder()
+            .match(Messages.RequestNodeRegistry.class, this::onRequestNodeRegistry)
+            .match(Messages.RequestDataItems.class, this::onRequestDataItems)
+            .match(Messages.DataItemsResponse.class, this::onDataItemsResponse)
+            .match(Messages.Announce.class, this::onAnnounce)
+            .match(Messages.UpdateNodeRegistry.class, this::onUpdateNodeRegistry)
+            .match(Messages.Leave.class, this::onLeave)
+            .match(Messages.NotifyLeave.class, this::onNotifyLeave)
+            .match(Messages.LeaveACK.class, this::onLeaveACK)
+            .match(Messages.RepartitionData.class, this::onRepartitionData)
+            .match(Messages.Crash.class, this::onCrash)
+            .match(Messages.ClientUpdate.class, this::onClientUpdate)
+            .match(Messages.ReplicaUpdate.class, this::onReplicaUpdate)
+            .match(Messages.ClientGet.class, this::onClientGet)
+            .match(Messages.ReplicaGet.class, this::onReplicaGet)
+            .match(Messages.GetResponse.class, this::onGetResponse)
+            .match(Messages.Recovery.class, this::onRecovery)
+            .match(Messages.Timeout.class, this::onTimeout)
+            .match(Messages.DebugPrintDataStore.class, this::onDebugPrintDataStore)
+            .matchAny(msg -> logger.warn("Node {} - Unhandled message: {}", this.id, msg.getClass().getSimpleName()))
+            .build();
+    }
+
+    public Receive crashed() {
+        return receiveBuilder()
+            .match(Messages.Recovery.class, this::onRecovery)
+            .matchAny(_ -> logger.debug("Node {} - Ignoring message while crashed", this.id))
+            .build();
+    }
+
+    // ===== UTILITY METHODS =====
+    
     private void scheduleMessage(ActorRef receiver, ActorRef sender, Object msg) {
         int randomDelay = 50 + random.nextInt(Messages.DELAY);
         getContext().system().scheduler().scheduleOnce(
-            Duration.create(randomDelay, TimeUnit.MILLISECONDS),  
-            receiver,
-            msg, // the message to send
-            getContext().system().dispatcher(), 
-            sender
+            Duration.create(randomDelay, TimeUnit.MILLISECONDS),
+            receiver, msg,
+            getContext().system().dispatcher(), sender
         );
     }
 
-    private void scheduleTimeoutMessage(ActorRef ref, Messages.Timeout msg) {            
+    private void scheduleTimeoutMessage(ActorRef ref, Messages.Timeout msg) {
         getContext().system().scheduler().scheduleOnce(
-            Duration.create(TimeoutDelay.getDelayForOperation(msg.opType), TimeUnit.MILLISECONDS),  
-            ref,
-            msg, // the message to send
-            getContext().system().dispatcher(), 
-            ref
+            Duration.create(TimeoutDelay.getDelayForOperation(msg.opType), TimeUnit.MILLISECONDS),
+            ref, msg,
+            getContext().system().dispatcher(), ref
         );
     }
 
-    //works only on the same coordinator
+    // ===== CONSISTENT HASHING =====
+    
+    private List<ActorRef> getNextNNodes(int key, SortedMap<Integer, ActorRef> nodeRegistry) {
+        List<ActorRef> result = new ArrayList<>();
+        
+        if (key < 0 || nodeRegistry.isEmpty()) {
+            return result;
+        }
+
+        if (nodeRegistry.size() == 1) {
+            result.add(nodeRegistry.firstEntry().getValue());
+            return result;
+        }
+
+        List<Integer> nodeIds = new ArrayList<>(nodeRegistry.keySet());
+        
+        // Find the first node with ID >= key (consistent hashing)
+        int startIndex = 0;
+        for (int i = 0; i < nodeIds.size(); i++) {
+            if (nodeIds.get(i) >= key) {
+                startIndex = i;
+                break;
+            }
+        }
+
+        // Add N nodes starting from startIndex (with wrap-around)
+        for (int i = 0; i < DataStoreManager.N && i < nodeIds.size(); i++) {
+            int index = (startIndex + i) % nodeIds.size();
+            Integer nodeId = nodeIds.get(index);
+            result.add(nodeRegistry.get(nodeId));
+        }
+
+        return result;
+    }
+
+    // ===== LOCKING MECHANISMS =====
+    
+    /**
+     * Check if a key is locked at the coordinator level
+     */
     private boolean isLocked(int key, OpType op) {
-        List<String> getOperationIdsList = new ArrayList<>(pendingGet.keySet());
-        List<String> updateOperationIdsList = new ArrayList<>(pendingUpdate.keySet());
-        String pattern = "-"+key+"-";
+        String pattern = "-" + key + "-";
+        
         return switch (op) {
-            case GET -> {
-                for (String operationsId: updateOperationIdsList) {
-                    if (operationsId.contains(pattern)) yield true;
-                }
-                yield false;
-            }
-            case UPDATE -> {
-                for(String operationsId: updateOperationIdsList) {
-                    if (operationsId.contains(pattern)) yield true;
-                }
-                for(String operationsId: getOperationIdsList) {
-                    if (operationsId.contains(pattern)) yield true;
-                }
-                yield false;
-            }
-            default -> {
-                System.out.println("WTF MOMENT, operation not recognized");
-                yield false;
-            }
+            case GET -> pendingUpdate.keySet().stream()
+                    .anyMatch(operationId -> operationId.contains(pattern));
+            
+            case UPDATE -> pendingUpdate.keySet().stream()
+                    .anyMatch(operationId -> operationId.contains(pattern)) ||
+                    pendingGet.keySet().stream()
+                    .anyMatch(operationId -> operationId.contains(pattern));
         };
     }
     
-    // Replica level
+    /**
+     * Acquire a lock at the replica level
+     */
     private boolean acquireLock(int key, OpType op, String operationId) {
         Set<String> locks = keylocks.computeIfAbsent(key, k -> new HashSet<>());
         OpType currentLockType = keyLockTypes.get(key);
 
         if (locks.isEmpty()) {
-            // No existing locks, acquire new one
             locks.add(operationId);
             keyLockTypes.put(key, op);
             return true;
         }
 
         if (currentLockType == OpType.GET && op == OpType.GET) {
-            // Multiple reads allowed
             locks.add(operationId);
             return true;
         }
 
-        // Write operation or mixed read / write => deny
-        return false;
+        return false; // Write operation or mixed read/write => deny
     }
     
+    /**
+     * Release a lock at the replica level
+     */
     private boolean releaseLock(int key, String operationId) {
         Set<String> locks = keylocks.get(key);
         if (locks != null) {
@@ -220,169 +279,29 @@ public class StorageNode extends AbstractActor implements DataService {
         return false;
     }
 
-
-    private List<ActorRef> getNextNNodes(int key, SortedMap<Integer,ActorRef> nodeRegistry) {
-        List<ActorRef> result = new ArrayList<>();
-        
-        if (key < 0 || nodeRegistry.isEmpty()) {
-            return result;
-        }
-
-        // For single node, return self
-        if (nodeRegistry.size() == 1) {
-            result.add(nodeRegistry.firstEntry().getValue());
-            return result;
-        }
-
-        // Get all node IDs in sorted order
-        List<Integer> nodeIds = new ArrayList<>(nodeRegistry.keySet());
-        
-        // Find the first node with ID >= key (consistent hashing)
-        int startIndex = 0;
-        for (int i = 0; i < nodeIds.size(); i++) {
-            if (nodeIds.get(i) >= key) {
-                startIndex = i;
-                break;
-            }
-        }
-
-        // Add REPLICATION_FACTOR nodes starting from startIndex (with wrap-around)
-        for (int i = 0; i < DataStoreManager.N && i < nodeIds.size(); i++) {
-            int index = (startIndex + i) % nodeIds.size();
-            Integer nodeId = nodeIds.get(index);
-            result.add(nodeRegistry.get(nodeId));
-        }
-
-        return result;
-    } 
-
-
-    @Override
-    public VersionedValue updateWithCurrentValue(int key, String value, VersionedValue currentValue) {
-        VersionedValue newVersionedValue;
-        
-        if (currentValue == null) {
-            // Create new versioned value if it doesn't exist
-            newVersionedValue = new VersionedValue(value, 1);
-        } else {
-            // Update existing value with incremented version
-            newVersionedValue = new VersionedValue(value, currentValue.getVersion() + 1);
-        }
+    // ===== DATA OPERATIONS =====
+    
+    private VersionedValue updateWithCurrentValue(int key, String value, VersionedValue currentValue) {
+        VersionedValue newVersionedValue = (currentValue == null) 
+            ? new VersionedValue(value, 1)
+            : new VersionedValue(value, currentValue.getVersion() + 1);
 
         dataStore.put(key, newVersionedValue);
         return newVersionedValue;
     }
 
-    @Override
-    public VersionedValue get(int key) {
-        return getDataStore().get(key); // Can return null if key doesn't exist
+    private VersionedValue get(int key) {
+        return dataStore.get(key);
     }
 
-
-    //--Actions on Messages--
-    private void onTimeout(Messages.Timeout msg) {
-        
-        switch(msg.opType) {
-            case CLIENT_GET -> {
-                if (pendingGet.containsKey(msg.operationId)) {
-                    ActorRef client = pendingGet.remove(msg.operationId).client;
-                    logger.warn("Node {} - Timeout on GET operation for key {}", this.id, msg.key);
-
-                    scheduleMessage(client, getSelf(), new Messages.Error(msg.key, msg.operationId, OperationType.CLIENT_GET));
-                }
-            }
-            case CLIENT_UPDATE -> {
-                if (pendingGet.containsKey(msg.operationId) && pendingUpdate.containsKey(msg.operationId)) {
-                    UpdateOperation updateOperation = pendingUpdate.remove(msg.operationId);
-                    pendingGet.remove(msg.operationId);
-                    
-                    logger.warn("Node {} (Coordinator) - Timeout on UPDATE operation for key {}", this.id, msg.key);
-                    
-                    for (ActorRef ref: getNextNNodes(updateOperation.key, this.nodeRegistry)) {
-                        if (ref != getSelf()) {
-                            scheduleMessage(ref, getSelf(), new Messages.Timeout(msg.operationId, OperationType.CLIENT_UPDATE, msg.key));
-                        }
-                    }
-
-                    releaseLock(msg.key, msg.operationId);
-                    scheduleMessage(updateOperation.client, getSelf(), new Messages.Error(msg.key, msg.operationId, OperationType.CLIENT_UPDATE));
-                    
-                } else if (releaseLock(msg.key, msg.operationId)) {
-                    logger.debug("Node {} (Replica) - Timeout on UPDATE operation for key {} - releasing lock", this.id, msg.key);
-                }
-            }
-            case JOIN -> {
-                if (this.nodeRegistry.isEmpty()) {
-                    getContext().become(initialSpawn());
-                    logger.error("Node {} - JOIN timeout: cannot contact neighbor", this.id);
-                } else {
-                    logger.debug("Node {} - JOIN timeout ignored (already connected)", this.id);
-                }
-            }
-            case LEAVE -> {
-                if (!this.nodeRegistry.isEmpty()) {
-                    logger.warn("Node {} - LEAVE timeout: staying in cluster", this.id);
-                } else {
-                    logger.debug("Node {} - LEAVE timeout ignored", this.id);
-                }
-            }
-            default -> {
-                logger.debug("Node {} - Unhandled timeout for operation type {}", this.id, msg.opType);
-            }
-        }
-    }
-
+    // ===== MESSAGE HANDLERS - LIFECYCLE =====
+    
     private void onJoin(Messages.Join msg) {
         getContext().become(createReceive());
-        
         logger.info("Node {} - Initiating JOIN operation", this.id);
         scheduleMessage(msg.bootstrappingPeer, getSelf(), new Messages.RequestNodeRegistry(UpdateType.JOIN));
         scheduleTimeoutMessage(getSelf(), new Messages.Timeout(null, OperationType.JOIN, -1));
     }
-
-    private void onRequestNodeRegistry(Messages.RequestNodeRegistry msg) {
-        logger.debug("Node {} - Received node registry request of type {}", this.id, msg.type);
-        scheduleMessage(sender(), getSelf(), new Messages.UpdateNodeRegistry(this.nodeRegistry, msg.type));
-    }
-
-    private void onRequestDataItems(Messages.RequestDataItems msg) {
-        logger.debug("Node {} - Received data items request from node {}", this.id, msg.askingID);
-        Map<Integer, VersionedValue> requestedDataItems = new TreeMap<>(this.dataStore);
-        scheduleMessage(sender(), getSelf(), new Messages.DataItemsResponse(requestedDataItems, msg.type));
-    }
-
-    private void onDataItemsReponse(Messages.DataItemsResponse msg) {
-        SortedMap<Integer, ActorRef> futureMap = new TreeMap<>(this.nodeRegistry);
-        futureMap.put(this.id, getSelf());
-
-        for (Integer key: msg.dataItems.keySet()) {
-            List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
-            
-            if (msg.type == UpdateType.JOIN) {
-                if (!getNextNNodes(key, futureMap).contains(getSelf())) continue;
-
-                String operationId = this.id + "-" + key + "-" + (++this.operationCounter);
-                GetOperation getOperation = new GetOperation(key, getSelf(), GetType.INIT);
-                pendingGet.put(operationId, getOperation);
-                
-                logger.debug("Node {} - Requesting initial data for key {} during JOIN", this.id, key);
-                for (ActorRef ref: nNodes) {
-                    scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(key, operationId, GetType.INIT));
-                }
-            } else {
-                if (nNodes.contains(getSelf()) && !this.dataStore.containsKey(key)) {
-                    logger.info("Node {} - Recovery: added key {} with value {}", this.id, key, msg.dataItems.get(key));
-                    this.dataStore.put(key, msg.dataItems.get((key)));
-                }
-            }
-        }
-    }
-
-    // Debug message to print the contents of a node's data store
-    private void onDebugPrintDataStore(Messages.DebugPrintDataStore msg) {
-        logger.info("Node {} DataStore: {}", this.id, this.dataStore);
-    }
-
 
     private void onLeave(Messages.Leave msg) {
         logger.info("Node {} - Initiating LEAVE operation", this.id);
@@ -391,14 +310,14 @@ public class StorageNode extends AbstractActor implements DataService {
         futureRegistry.remove(this.id);
 
         Set<ActorRef> neededAcks = new HashSet<>();
-        for (Integer key: this.dataStore.keySet()) {
+        for (Integer key : this.dataStore.keySet()) {
             neededAcks.addAll(getNextNNodes(key, futureRegistry));
         }
 
         logger.debug("Node {} - Waiting for {} ACKs to leave", this.id, neededAcks.size());
         this.leaveOperation = new LeaveOperation(neededAcks);
         
-        for (ActorRef ref: neededAcks) {
+        for (ActorRef ref : neededAcks) {
             scheduleMessage(ref, getSelf(), new Messages.NotifyLeave());
         }
         
@@ -411,11 +330,13 @@ public class StorageNode extends AbstractActor implements DataService {
     }
     
     private void onLeaveACK(Messages.LeaveACK msg) {
-        this.leaveOperation.receivedAcks.add(sender());
+        if (leaveOperation == null) return;
+        
+        leaveOperation.receivedAcks.add(sender());
 
-        if (this.leaveOperation.receivedAcks.equals(this.leaveOperation.neededAcks)) {
+        if (leaveOperation.receivedAcks.equals(leaveOperation.neededAcks)) {
             logger.info("Node {} - All ACKs received, proceeding with leave", this.id);
-            for (ActorRef ref: this.leaveOperation.receivedAcks) {
+            for (ActorRef ref : leaveOperation.receivedAcks) {
                 scheduleMessage(ref, getSelf(), new Messages.RepartitionData(this.id, this.dataStore));
             }
             this.nodeRegistry.clear();
@@ -423,34 +344,6 @@ public class StorageNode extends AbstractActor implements DataService {
             logger.info("Node {} - Successfully left the cluster", this.id);
         }
     }
-
-    private void onRepartitionData(Messages.RepartitionData msg) {
-        logger.info("Node {} - Processing data repartition from leaving node {}", this.id, msg.leavingId);
-        this.nodeRegistry.remove(msg.leavingId);
-
-        int itemsReceived = 0;
-        for (Integer key: msg.items.keySet()) {
-            List<ActorRef> newOwners = getNextNNodes(key, this.nodeRegistry);
-
-            if (newOwners.contains(getSelf())) {
-                VersionedValue givenValue = msg.items.get(key);
-                VersionedValue posessedValue = this.dataStore.get(key);
-
-                if (posessedValue == null || posessedValue.getVersion() < givenValue.getVersion()) {
-                    this.dataStore.put(key, givenValue);
-                    itemsReceived++;
-                    logger.debug("Node {} - Received key {} with value {} from leaving node {}", 
-                                    this.id, key, givenValue, msg.leavingId);
-                }
-            }
-        }
-        
-        if (itemsReceived > 0) {
-            logger.info("Node {} - Successfully received {} data items from leaving node {}", 
-                       this.id, itemsReceived, msg.leavingId);
-        }
-    }
-
 
     private void onCrash(Messages.Crash msg) {
         getContext().become(crashed());
@@ -463,38 +356,265 @@ public class StorageNode extends AbstractActor implements DataService {
         scheduleMessage(msg.recoveryNode, getSelf(), new Messages.RequestNodeRegistry(UpdateType.RECOVERY));
     }
 
+    // ===== MESSAGE HANDLERS - REGISTRY MANAGEMENT =====
+    
+    private void onRequestNodeRegistry(Messages.RequestNodeRegistry msg) {
+        logger.debug("Node {} - Received node registry request of type {}", this.id, msg.type);
+        scheduleMessage(sender(), getSelf(), new Messages.UpdateNodeRegistry(this.nodeRegistry, msg.type));
+    }
+
+    private void onUpdateNodeRegistry(Messages.UpdateNodeRegistry msg) {
+        this.nodeRegistry.clear();
+        this.nodeRegistry.putAll(msg.nodeRegistry);
+
+        switch (msg.type) {
+            case INIT -> handleInitUpdate();
+            case RECOVERY -> handleRecoveryUpdate();
+            case JOIN -> handleJoinUpdate();
+            default -> logger.warn("Node {} - Unknown registry update type: {}", this.id, msg.type);
+        }
+
+        logger.info("Node {} - Registry updated: now tracking {} nodes", this.id, this.nodeRegistry.size());
+    }
+
+    private void handleInitUpdate() {
+        this.nodeRegistry.put(this.id, getSelf());
+        logger.info("Node {} - Node registry initialized with {} nodes", this.id, this.nodeRegistry.size());
+        getContext().become(createReceive());
+    }
+
+    private void handleRecoveryUpdate() {
+        ActorRef neighbor = findNeighborForRecovery();
+        if (neighbor != null) {
+            logger.info("Node {} - Recovery: requesting data items from neighbor", this.id);
+            scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, UpdateType.RECOVERY));
+        }
+        cleanupObsoleteData();
+    }
+
+    private void handleJoinUpdate() {
+        ActorRef neighbor = findNeighborForJoin();
+        if (neighbor != null) {
+            logger.info("Node {} - JOIN: requesting data items from neighbor", this.id);
+            scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, UpdateType.JOIN));
+        }
+    }
+
+    private ActorRef findNeighborForRecovery() {
+        SortedMap<Integer, ActorRef> lowerNodes = this.nodeRegistry.headMap(this.id);
+        return lowerNodes.isEmpty() 
+            ? this.nodeRegistry.lastEntry().getValue()
+            : lowerNodes.lastEntry().getValue();
+    }
+
+    private ActorRef findNeighborForJoin() {
+        SortedMap<Integer, ActorRef> higherNodes = this.nodeRegistry.tailMap(this.id);
+        return higherNodes.isEmpty()
+            ? this.nodeRegistry.firstEntry().getValue()
+            : higherNodes.firstEntry().getValue();
+    }
+
+    private void cleanupObsoleteData() {
+        int droppedItems = 0;
+        var iterator = this.dataStore.entrySet().iterator();
+        
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            Integer key = entry.getKey();
+            VersionedValue value = entry.getValue();
+            List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
+            
+            if (!nNodes.contains(getSelf())) {
+                iterator.remove();
+                droppedItems++;
+                logger.debug("Node {} - Recovery: dropped key {} (value: {})", this.id, key, value);
+            }
+        }
+        
+        if (droppedItems > 0) {
+            logger.info("Node {} - Recovery: dropped {} obsolete data items", this.id, droppedItems);
+        }
+    }
+
+    private void onAnnounce(Messages.Announce msg) {
+        logger.info("Node {} - Node {} announced join", this.id, msg.announcingId);
+        this.nodeRegistry.put(msg.announcingId, sender());
+        
+        int itemsDropped = cleanupDataAfterJoin();
+        
+        if (itemsDropped > 0) {
+            logger.info("Node {} - Dropped {} data items due to node {} join", this.id, itemsDropped, msg.announcingId);
+        }
+    }
+
+    private int cleanupDataAfterJoin() {
+        Map<Integer, VersionedValue> itemsToCheck = new TreeMap<>(this.dataStore);
+        int itemsDropped = 0;
+        
+        for (Integer key : itemsToCheck.keySet()) {
+            List<ActorRef> shouldPossess = getNextNNodes(key, this.nodeRegistry);
+            if (!shouldPossess.contains(getSelf())) {
+                VersionedValue itemToRemove = this.dataStore.remove(key);
+                itemsDropped++;
+                logger.debug("Node {} - Dropped key {} (value: {}) due to topology change", 
+                           this.id, key, itemToRemove);
+            }
+        }
+        
+        return itemsDropped;
+    }
+
+    // ===== MESSAGE HANDLERS - DATA OPERATIONS =====
+    
+    private void onRequestDataItems(Messages.RequestDataItems msg) {
+        logger.debug("Node {} - Received data items request from node {}", this.id, msg.askingID);
+        Map<Integer, VersionedValue> requestedDataItems = new TreeMap<>(this.dataStore);
+        scheduleMessage(sender(), getSelf(), new Messages.DataItemsResponse(requestedDataItems, msg.type));
+    }
+
+    private void onDataItemsResponse(Messages.DataItemsResponse msg) {
+        SortedMap<Integer, ActorRef> futureMap = new TreeMap<>(this.nodeRegistry);
+        futureMap.put(this.id, getSelf());
+
+        for (Integer key : msg.dataItems.keySet()) {
+            if (msg.type == UpdateType.JOIN) {
+                handleJoinDataItem(key, futureMap);
+            } else {
+                handleRecoveryDataItem(key, msg.dataItems.get(key));
+            }
+        }
+    }
+
+    private void handleJoinDataItem(Integer key, SortedMap<Integer, ActorRef> futureMap) {
+        if (!getNextNNodes(key, futureMap).contains(getSelf())) {
+            return;
+        }
+
+        String operationId = this.id + "-" + key + "-" + (++this.operationCounter);
+        GetOperation getOperation = new GetOperation(key, getSelf(), GetType.INIT);
+        pendingGet.put(operationId, getOperation);
+        
+        logger.debug("Node {} - Requesting initial data for key {} during JOIN", this.id, key);
+        List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
+        for (ActorRef ref : nNodes) {
+            scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(key, operationId, GetType.INIT));
+        }
+    }
+
+    private void handleRecoveryDataItem(Integer key, VersionedValue value) {
+        List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
+        if (nNodes.contains(getSelf()) && !this.dataStore.containsKey(key)) {
+            logger.info("Node {} - Recovery: added key {} with value {}", this.id, key, value);
+            this.dataStore.put(key, value);
+        }
+    }
+
+    private void onRepartitionData(Messages.RepartitionData msg) {
+        logger.info("Node {} - Processing data repartition from leaving node {}", this.id, msg.leavingId);
+        this.nodeRegistry.remove(msg.leavingId);
+
+        int itemsReceived = 0;
+        for (Map.Entry<Integer, VersionedValue> entry : msg.items.entrySet()) {
+            Integer key = entry.getKey();
+            VersionedValue givenValue = entry.getValue();
+            
+            List<ActorRef> newOwners = getNextNNodes(key, this.nodeRegistry);
+
+            if (newOwners.contains(getSelf())) {
+                VersionedValue possessedValue = get(key);
+
+                if (possessedValue == null || possessedValue.getVersion() < givenValue.getVersion()) {
+                    this.dataStore.put(key, givenValue);
+                    itemsReceived++;
+                    logger.debug("Node {} - Received key {} with value {} from leaving node {}", 
+                               this.id, key, givenValue, msg.leavingId);
+                }
+            }
+        }
+        
+        if (itemsReceived > 0) {
+            logger.info("Node {} - Successfully received {} data items from leaving node {}", 
+                       this.id, itemsReceived, msg.leavingId);
+        }
+    }
+
+    // ===== MESSAGE HANDLERS - CLIENT OPERATIONS =====
+    
     private void onClientUpdate(Messages.ClientUpdate msg) {
         logger.info("Node {} - UPDATE request: key={}, value={}", this.id, msg.key, msg.value);
         
-        String operationId = this.id + "-" + msg.key + "-" + (++operationCounter);
+        String operationId = generateOperationId(msg.key);
 
-        // Check coordinator-level locks first
-        if(isLocked(msg.key, OpType.UPDATE) || isLocked(msg.key, OpType.GET)) {
-            logger.warn("Node {} - UPDATE rejected: key {} is locked at coordinator level", this.id, msg.key);
-            scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_UPDATE));
+        if (isOperationBlocked(msg.key, OpType.UPDATE, operationId)) {
             return;
         }
 
         List<ActorRef> nodeList = getNextNNodes(msg.key, this.nodeRegistry);
         
-        // Only acquire replica-level lock if this node is part of the replicas
-        if (nodeList.contains(getSelf())) {
-            if (!acquireLock(msg.key, OpType.UPDATE, operationId)) {
-                logger.warn("Node {} - UPDATE rejected: key {} is locked at replica level", this.id, msg.key);
-                scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_UPDATE));
-                return;
-            }
+        if (!tryAcquireReplicaLock(msg.key, OpType.UPDATE, operationId, nodeList)) {
+            return;
         }
 
+        startReadBeforeUpdate(msg, operationId, nodeList);
+    }
+
+    private void onClientGet(Messages.ClientGet msg) {
+        logger.info("Node {} - GET request: key={}", this.id, msg.key);
+        
+        String operationId = generateOperationId(msg.key);
+
+        if (isLocked(msg.key, OpType.UPDATE)) {
+            logger.warn("Node {} - GET rejected: key {} is locked for update at coordinator level", this.id, msg.key);
+            scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_GET));
+            return;
+        }
+
+        List<ActorRef> nodeList = getNextNNodes(msg.key, this.nodeRegistry);
+        
+        if (!tryAcquireReplicaLock(msg.key, OpType.GET, operationId, nodeList)) {
+            return;
+        }
+
+        startGetOperation(msg, operationId, nodeList);
+    }
+
+    private String generateOperationId(int key) {
+        return this.id + "-" + key + "-" + (++operationCounter);
+    }
+
+    private boolean isOperationBlocked(int key, OpType opType, String operationId) {
+        if (isLocked(key, opType)) {
+            logger.warn("Node {} - {} rejected: key {} is locked at coordinator level", 
+                       this.id, opType, key);
+            scheduleMessage(sender(), getSelf(), 
+                          new Messages.Error(key, operationId, 
+                                           opType == OpType.UPDATE ? OperationType.CLIENT_UPDATE : OperationType.CLIENT_GET));
+            return true;
+        }
+        return false;
+    }
+
+    private boolean tryAcquireReplicaLock(int key, OpType opType, String operationId, List<ActorRef> nodeList) {
+        if (nodeList.contains(getSelf()) && !acquireLock(key, opType, operationId)) {
+            logger.warn("Node {} - {} rejected: key {} is locked at replica level", this.id, opType, key);
+            scheduleMessage(sender(), getSelf(), 
+                          new Messages.Error(key, operationId, 
+                                           opType == OpType.UPDATE ? OperationType.CLIENT_UPDATE : OperationType.CLIENT_GET));
+            return false;
+        }
+        return true;
+    }
+
+    private void startReadBeforeUpdate(Messages.ClientUpdate msg, String operationId, List<ActorRef> nodeList) {
         GetOperation getOperation = new GetOperation(msg.key, sender(), msg.value);
         pendingGet.put(operationId, getOperation);
         UpdateOperation updateOperation = new UpdateOperation(msg.key, sender());
         pendingUpdate.put(operationId, updateOperation);
 
         logger.debug("Node {} - Starting read-before-update for key {}", this.id, msg.key);
-        for (ActorRef ref: nodeList) {
+        for (ActorRef ref : nodeList) {
             if (ref == getSelf()) {
-                VersionedValue localValue = this.dataStore.get(msg.key);
+                VersionedValue localValue = get(msg.key);
                 getOperation.responses.add(localValue);
                 logger.debug("Node {} - Local read for update: key={}, value={}", this.id, msg.key, localValue);
             } else {
@@ -506,41 +626,13 @@ public class StorageNode extends AbstractActor implements DataService {
         checkGetOperation(operationId);
     }
 
-    private void onReplicaUpdate(Messages.ReplicaUpdate msg) {
-        VersionedValue result = updateWithCurrentValue(msg.key, msg.value, msg.currentValue);
-        releaseLock(msg.key, msg.operationId);
-        logger.debug("Node {} - Replica update completed: key={}, new_value={} - lock released", this.id, msg.key, result);
-    }
-
-
-    private void onClientGet(Messages.ClientGet msg) {
-        logger.info("Node {} - GET request: key={}", this.id, msg.key);
-        
-        String operationId = this.id + "-" + msg.key + "-" + (++operationCounter);
-
-        if(isLocked(msg.key, OpType.UPDATE)) {
-            logger.warn("Node {} - GET rejected: key {} is locked for update at coordinator level", this.id, msg.key);
-            scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_GET));
-            return;
-        }
-
-        List<ActorRef> nodeList = getNextNNodes(msg.key, this.nodeRegistry);
-        
-        // Only acquire replica-level lock if this node is part of the replicas
-        if (nodeList.contains(getSelf())) {
-            if (!acquireLock(msg.key, OpType.GET, operationId)) {
-                logger.warn("Node {} - GET rejected: key {} is locked at replica level", this.id, msg.key);
-                scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_GET));
-                return;
-            }
-        }
-
+    private void startGetOperation(Messages.ClientGet msg, String operationId, List<ActorRef> nodeList) {
         GetOperation operation = new GetOperation(msg.key, sender(), GetType.GET);
         pendingGet.put(operationId, operation);
     
-        for (ActorRef ref: nodeList) {
+        for (ActorRef ref : nodeList) {
             if (ref == getSelf()) {
-                VersionedValue localValue = this.dataStore.get(msg.key);
+                VersionedValue localValue = get(msg.key);
                 operation.responses.add(localValue);
                 logger.debug("Node {} - Local GET: key={}, value={}", this.id, msg.key, localValue);
                 releaseLock(msg.key, operationId);
@@ -552,110 +644,114 @@ public class StorageNode extends AbstractActor implements DataService {
         scheduleTimeoutMessage(getSelf(), new Messages.Timeout(operationId, OperationType.CLIENT_GET, msg.key));
         checkGetOperation(operationId);
     }
-    
+
+    // ===== MESSAGE HANDLERS - REPLICA OPERATIONS =====
     
     private void onReplicaGet(Messages.ReplicaGet msg) {
         OpType lockType = (msg.getType == GetType.UPDATE) ? OpType.UPDATE : OpType.GET;
         
         if (!acquireLock(msg.key, lockType, msg.operationId)) {
-            logger.warn("Node {} - Cannot execute {} on key {}: locked at replica level", this.id, msg.getType, msg.key);
+            logger.warn("Node {} - Cannot execute {} on key {}: locked at replica level", 
+                       this.id, msg.getType, msg.key);
             return;
         }
 
-        VersionedValue requestedValue = this.dataStore.get(msg.key);
-        logger.debug("Node {} - Replica GET: key={}, value={}, type={} - lock released", this.id, msg.key, requestedValue, msg.getType);
+        VersionedValue requestedValue = get(msg.key);
+        logger.debug("Node {} - Replica GET: key={}, value={}, type={}", 
+                    this.id, msg.key, requestedValue, msg.getType);
         
         if (msg.getType == GetType.GET || msg.getType == GetType.INIT) {
             releaseLock(msg.key, msg.operationId);
         }
 
         scheduleMessage(sender(), getSelf(), new Messages.GetResponse(msg.key, requestedValue, msg.operationId));
-        
+    }
+
+    private void onReplicaUpdate(Messages.ReplicaUpdate msg) {
+        VersionedValue result = updateWithCurrentValue(msg.key, msg.value, msg.currentValue);
+        releaseLock(msg.key, msg.operationId);
+        logger.debug("Node {} - Replica update completed: key={}, new_value={} - lock released", 
+                    this.id, msg.key, result);
     }
 
     private void onGetResponse(Messages.GetResponse msg) {
-        // Find the corresponding get operation
         GetOperation operation = pendingGet.get(msg.operationId);
-
-        if (operation == null) return; // Opeartion might have already completed or timed out
+        if (operation == null) return; // Operation might have already completed or timed out
         
-        // Add response to collected responses
         operation.responses.add(msg.value);
-        
-        // Check if we have enough responses for quorum
         checkGetOperation(msg.operationId);
     }
     
+    // ===== OPERATION COMPLETION LOGIC =====
+    
     private void checkGetOperation(String operationId) {
         GetOperation operation = pendingGet.get(operationId);
-        
         if (operation == null) return;
 
         switch (operation.getType) {
-            case UPDATE -> {
-                if (operation.responses.size() >= DataStoreManager.W) {
-                    VersionedValue currentValue = null;
-                    for (VersionedValue value: operation.responses) {
-                        if (value != null && (currentValue == null || value.getVersion() > currentValue.getVersion())) {
-                            currentValue = value;
-                        }
-                    }
+            case UPDATE -> handleUpdateCompletion(operation, operationId);
+            case GET -> handleGetCompletion(operation, operationId);
+            case INIT -> handleInitCompletion(operation, operationId);
+        }
+    }
 
-                    Messages.UpdateResponse response;
-                    
-                    if (currentValue == null) {
-                        response = new Messages.UpdateResponse(operation.key, new VersionedValue(operation.updateValue, 1), operationId);
-                    } else {
-                        response = new Messages.UpdateResponse(operation.key, new VersionedValue(operation.updateValue, currentValue.getVersion() + 1), operationId);
-                    }
+    private void handleUpdateCompletion(GetOperation operation, String operationId) {
+        if (operation.responses.size() >= DataStoreManager.W) {
+            VersionedValue currentValue = findLatestValue(operation.responses);
+            
+            VersionedValue newValue = (currentValue == null) 
+                ? new VersionedValue(operation.updateValue, 1)
+                : new VersionedValue(operation.updateValue, currentValue.getVersion() + 1);
 
-                    scheduleMessage(operation.client, getSelf(), response);
-                    pendingGet.remove(operationId);
-                    logger.info("Node {} - UPDATE completed: key={}, new_version={}", this.id, operation.key, 
-                              response.versionedValue.getVersion());
-                    performActualUpdate(operation.key, operation.updateValue, operationId, operation.client, currentValue);
-                }
-            }
-            case GET -> {
-                if (operation.responses.size() >= DataStoreManager.R) {
-                    VersionedValue latestValue = null;
-                    for (VersionedValue value: operation.responses) {
-                        if (value != null && (latestValue == null || value.getVersion() > latestValue.getVersion())) {
-                            latestValue = value;
-                        }
-                    }
-                    
-                    Messages.GetResponse response = new Messages.GetResponse(operation.key, latestValue, operationId);
-                    scheduleMessage(operation.client, getSelf(), response);
-                    pendingGet.remove(operationId);
-                    logger.info("Node {} - GET completed: key={}, value={}", this.id, operation.key, latestValue);
-                }
-            }
-            case INIT -> {
-                if (operation.responses.size() == DataStoreManager.N) {
-                    VersionedValue latestValue = null;
-                    for (VersionedValue value: operation.responses) {
-                        if (value != null && (latestValue == null || value.getVersion() > latestValue.getVersion())) {
-                            latestValue = value;
-                        }
-                    }
-                    
-                    this.dataStore.put(operation.key, latestValue);
-                    pendingGet.remove(operationId);
-                    
-                    if (!this.nodeRegistry.containsKey(this.id)) {
-                        logger.info("Node {} - JOIN completing/completed, inserted one of the necessary data items", this.id, this.dataStore.size());
-                        this.nodeRegistry.put(this.id, getSelf());
-                        
-                        for (ActorRef ref: nodeRegistry.values()) {
-                            if (ref != getSelf()) {
-                                scheduleMessage(ref, getSelf(), new Messages.Announce(this.id));
-                            } 
-                        }
-                    }
+            Messages.UpdateResponse response = new Messages.UpdateResponse(operation.key, newValue, operationId);
+            scheduleMessage(operation.client, getSelf(), response);
+            pendingGet.remove(operationId);
+            
+            logger.info("Node {} - UPDATE completed: key={}, new_version={}", 
+                       this.id, operation.key, newValue.getVersion());
+            performActualUpdate(operation.key, operation.updateValue, operationId, operation.client, currentValue);
+        }
+    }
+
+    private void handleGetCompletion(GetOperation operation, String operationId) {
+        if (operation.responses.size() >= DataStoreManager.R) {
+            VersionedValue latestValue = findLatestValue(operation.responses);
+            
+            Messages.GetResponse response = new Messages.GetResponse(operation.key, latestValue, operationId);
+            scheduleMessage(operation.client, getSelf(), response);
+            pendingGet.remove(operationId);
+            logger.info("Node {} - GET completed: key={}, value={}", this.id, operation.key, latestValue);
+        }
+    }
+
+    private void handleInitCompletion(GetOperation operation, String operationId) {
+        if (operation.responses.size() == DataStoreManager.N) {
+            VersionedValue latestValue = findLatestValue(operation.responses);
+            
+            this.dataStore.put(operation.key, latestValue);
+            pendingGet.remove(operationId);
+            
+            if (!this.nodeRegistry.containsKey(this.id)) {
+                logger.debug("Node {} - JOIN: acquired key {} with value {}", this.id, operation.key, latestValue);
+                this.nodeRegistry.put(this.id, getSelf());
+                
+                for (ActorRef ref : nodeRegistry.values()) {
+                    if (ref != getSelf()) {
+                        scheduleMessage(ref, getSelf(), new Messages.Announce(this.id));
+                    } 
                 }
             }
         }
+    }
+
+    private VersionedValue findLatestValue(List<VersionedValue> values) {
+        VersionedValue latest = null;
+        for (VersionedValue value : values) {
+            if (value != null && (latest == null || value.getVersion() > latest.getVersion())) {
+                latest = value;
+            }
+        }
+        return latest;
     }
 
     private void performActualUpdate(int key, String value, String operationId, ActorRef client, VersionedValue currentValue) {
@@ -668,7 +764,7 @@ public class StorageNode extends AbstractActor implements DataService {
         }
 
         logger.debug("Node {} - Executing actual update for key {}", this.id, key);
-        for (ActorRef ref: nodeList) {
+        for (ActorRef ref : nodeList) {
             if (ref == getSelf()) {
                 VersionedValue versionedValue = updateWithCurrentValue(key, value, currentValue);
                 operation.responses.add(versionedValue);
@@ -682,149 +778,68 @@ public class StorageNode extends AbstractActor implements DataService {
         releaseLock(key, operationId);
     }
 
+    // ===== MESSAGE HANDLERS - ERROR HANDLING =====
     
-
-    //TODO for testing
-    private void onUpdateNodeRegistry(Messages.UpdateNodeRegistry msg) {
-        this.nodeRegistry.clear();
-        this.nodeRegistry.putAll(msg.nodeRegistry);
-
-        switch(msg.type) {
-            case INIT -> {
-                this.nodeRegistry.put(this.id, getSelf());
-                logger.info("Node {} - Node registry initialized with {} nodes", this.id, this.nodeRegistry.size());
-                // Switch to normal receive mode after initialization
-                getContext().become(createReceive());
-            }
-            case RECOVERY -> {
-                SortedMap<Integer, ActorRef> lowerNodes = this.nodeRegistry.headMap(this.id);
-                
-                ActorRef neighbor;
-                int neighborId;
-                if (lowerNodes.isEmpty()) {
-                    neighborId = this.nodeRegistry.lastEntry().getKey();
-                    neighbor = this.nodeRegistry.lastEntry().getValue();
-                } else {
-                    neighborId = lowerNodes.lastEntry().getKey();
-                    neighbor = lowerNodes.lastEntry().getValue();
-                }
-
-                logger.info("Node {} - Recovery: requesting data items from node {}", this.id, neighborId);
-                scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, UpdateType.RECOVERY));
-
-                int droppedItems = 0;
-                this.dataStore.entrySet().removeIf(entry -> {
-                    Integer key = entry.getKey();
-                    VersionedValue value = entry.getValue();
-                    List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
-                    
-                    if (!nNodes.contains(getSelf())) {
-                        logger.debug("Node {} - Recovery: dropped key {} (value: {})", this.id, key, value);
-                        return true;
-                    }
-                    return false;
-                });
-                
-                if (droppedItems > 0) {
-                    logger.info("Node {} - Recovery: dropped {} obsolete data items", this.id, droppedItems);
-                }
-            }
-            case JOIN -> {
-                SortedMap<Integer, ActorRef> higherNodes = this.nodeRegistry.tailMap(this.id);
-                ActorRef neighbor;
-                int neighborId;
-                
-                if (higherNodes.isEmpty()) {
-                    neighbor = this.nodeRegistry.firstEntry().getValue();
-                    neighborId = this.nodeRegistry.firstKey();
-                } else {
-                    neighbor = higherNodes.firstEntry().getValue();
-                    neighborId = higherNodes.firstKey();
-                }
-                
-                logger.info("Node {} - JOIN: requesting data items from node {}", this.id, neighborId);
-                scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, UpdateType.JOIN));
-            }
-            default -> logger.warn("Node {} - Unknown registry update type: {}", this.id, msg.type);
-        }
-
-        logger.info("Node {} - Registry updated: now tracking {} nodes", this.id, this.nodeRegistry.size());
-    }
-
-    private void onAnnouce(Messages.Announce msg) {
-        logger.info("Node {} - Node {} announced join", this.id, msg.announcingId);
-        this.nodeRegistry.put(msg.announcingId, sender());
-        Map<Integer, VersionedValue> requestedDataItems = new TreeMap<>(this.dataStore);
-
-        int itemsDropped = 0;
-        for(Integer key: requestedDataItems.keySet()) {
-            List<ActorRef> shouldPosess = getNextNNodes(key, this.nodeRegistry);
-            if (!shouldPosess.contains(getSelf())) {
-                VersionedValue itemToRemove = this.dataStore.get(key); 
-                this.dataStore.remove(key);
-                itemsDropped++;
-                logger.debug("Node {} - Dropped key {} (value: {}) due to node {} join", 
-                                this.id, key, itemToRemove, msg.announcingId);
-            }
-        }
-        
-        if (itemsDropped > 0) {
-            logger.info("Node {} - Dropped {} data items due to node {} join", this.id, itemsDropped, msg.announcingId);
+    private void onTimeout(Messages.Timeout msg) {
+        switch (msg.opType) {
+            case CLIENT_GET -> handleGetTimeout(msg);
+            case CLIENT_UPDATE -> handleUpdateTimeout(msg);
+            case JOIN -> handleJoinTimeout();
+            case LEAVE -> handleLeaveTimeout();
+            default -> logger.debug("Node {} - Unhandled timeout for operation type {}", this.id, msg.opType);
         }
     }
 
-    //--akka--
-    static public Props props(int id) {
-        return Props.create(StorageNode.class, () -> new StorageNode(id));
+    private void handleGetTimeout(Messages.Timeout msg) {
+        if (pendingGet.containsKey(msg.operationId)) {
+            ActorRef client = pendingGet.remove(msg.operationId).client;
+            logger.warn("Node {} - Timeout on GET operation for key {}", this.id, msg.key);
+            scheduleMessage(client, getSelf(), new Messages.Error(msg.key, msg.operationId, OperationType.CLIENT_GET));
+        }
     }
 
+    private void handleUpdateTimeout(Messages.Timeout msg) {
+        if (pendingGet.containsKey(msg.operationId) && pendingUpdate.containsKey(msg.operationId)) {
+            UpdateOperation updateOperation = pendingUpdate.remove(msg.operationId);
+            pendingGet.remove(msg.operationId);
+            
+            logger.warn("Node {} (Coordinator) - Timeout on UPDATE operation for key {}", this.id, msg.key);
+            
+            // Notify replica nodes about timeout
+            for (ActorRef ref : getNextNNodes(updateOperation.key, this.nodeRegistry)) {
+                if (ref != getSelf()) {
+                    scheduleMessage(ref, getSelf(), new Messages.Timeout(msg.operationId, OperationType.CLIENT_UPDATE, msg.key));
+                }
+            }
 
-
-    @Override
-    public void preStart() throws Exception {
-        super.preStart();
-        // Set initial behaviour when actor starts
-        getContext().become(initialSpawn());
+            releaseLock(msg.key, msg.operationId);
+            scheduleMessage(updateOperation.client, getSelf(), new Messages.Error(msg.key, msg.operationId, OperationType.CLIENT_UPDATE));
+            
+        } else if (releaseLock(msg.key, msg.operationId)) {
+            logger.debug("Node {} (Replica) - Timeout on UPDATE operation for key {} - releasing lock", this.id, msg.key);
+        }
     }
 
-    public Receive initialSpawn() {
-        return receiveBuilder()
-            .match(Messages.Join.class, this::onJoin)
-            .match(Messages.UpdateNodeRegistry.class, this::onUpdateNodeRegistry)
-            .matchAny(_ -> {})
-            .build();
+    private void handleJoinTimeout() {
+        if (this.nodeRegistry.isEmpty()) {
+            getContext().become(initialSpawn());
+            logger.error("Node {} - JOIN timeout: cannot contact neighbor", this.id);
+        } else {
+            logger.debug("Node {} - JOIN timeout ignored (already connected)", this.id);
+        }
     }
 
-    @Override
-    public Receive createReceive() {
-        return receiveBuilder()
-            .match(Messages.RequestNodeRegistry.class, this::onRequestNodeRegistry)
-            .match(Messages.RequestDataItems.class, this::onRequestDataItems)
-            .match(Messages.DataItemsResponse.class, this::onDataItemsReponse)
-            .match(Messages.Announce.class, this::onAnnouce)
-            .match(Messages.UpdateNodeRegistry.class, this::onUpdateNodeRegistry)
-            .match(Messages.Join.class, this::onJoin) // Add this line
-            .match(Messages.Leave.class, this::onLeave)
-            .match(Messages.NotifyLeave.class, this::onNotifyLeave)
-            .match(Messages.LeaveACK.class, this::onLeaveACK)
-            .match(Messages.RepartitionData.class, this::onRepartitionData)
-            .match(Messages.Crash.class, this::onCrash)
-            .match(Messages.ClientUpdate.class, this::onClientUpdate)
-            .match(Messages.ReplicaUpdate.class, this::onReplicaUpdate)
-            .match(Messages.ClientGet.class, this::onClientGet)
-            .match(Messages.ReplicaGet.class, this::onReplicaGet)
-            .match(Messages.GetResponse.class, this::onGetResponse)
-            .match(Messages.Recovery.class, this::onRecovery) // Add this if not present
-            .match(Messages.Timeout.class, this::onTimeout)
-            .match(Messages.DebugPrintDataStore.class, this::onDebugPrintDataStore)
-            .matchAny(_ -> {})
-            .build();
+    private void handleLeaveTimeout() {
+        if (!this.nodeRegistry.isEmpty()) {
+            logger.warn("Node {} - LEAVE timeout: staying in cluster", this.id);
+        } else {
+            logger.debug("Node {} - LEAVE timeout ignored", this.id);
+        }
     }
 
-    public Receive crashed() {
-      return receiveBuilder()
-              .match(Messages.Recovery.class, this::onRecovery)
-              .matchAny(_ -> {})
-              .build();
+    // ===== DEBUG UTILITIES =====
+    
+    private void onDebugPrintDataStore(Messages.DebugPrintDataStore msg) {
+        logger.info("Node {} DataStore: {}", this.id, this.dataStore);
     }
 }
