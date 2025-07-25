@@ -112,6 +112,16 @@ public class Main {
         node5.tell(new Messages.ClientGet(200), client1);
         sleepForOperation(OperationType.CLIENT_GET);
 
+        logger.info("=== Operation 5.5: Update key=-1 (non-existent) ===");
+        node5.tell(new Messages.ClientGet(-1), client1);
+        sleepForOperation(OperationType.CLIENT_GET);
+
+
+        logger.info("=== Operation 5.75: Update key=-782 (non-existent) ===");
+        node1.tell(new Messages.ClientUpdate(-782, "ERROR"), client1);
+        sleepForOperation(OperationType.CLIENT_UPDATE);
+
+
         printNodeContents(nodeRegistry);
     }
 
@@ -191,6 +201,15 @@ public class Main {
         sleepForOperation(OperationType.JOIN);
         nodeRegistry.put(10, node10);
         printNodeContents(nodeRegistry);
+
+
+        // logger.info("=== Operation 15.75: Node 10 Re-Join operation ===");
+        // ActorRef node10_5 = system.actorOf(StorageNode.props(10), "node-10-quello-falso");
+        // node10_5.tell(new Messages.Join(node10), nodeSystem);
+        // sleepForOperation(OperationType.JOIN);
+        // nodeRegistry.put(11, node10_5);
+        // printNodeContents(nodeRegistry);
+
     }
 
     // Test concurrent operations and race conditions

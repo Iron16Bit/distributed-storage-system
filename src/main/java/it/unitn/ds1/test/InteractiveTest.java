@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 
 import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
+import it.unitn.ds1.DataStoreManager;
 import it.unitn.ds1.Messages;
 import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.StorageNode;
@@ -46,6 +47,9 @@ public class InteractiveTest {
 
     // Command definitions for fuzzy search
     private static final Map<String, CommandInfo> COMMANDS = new HashMap<>();
+
+    // DataStore Manager
+    private static final DataStoreManager dataStoreManager = DataStoreManager.getInstance();
     
     static {
         initializeCommands();
@@ -115,7 +119,7 @@ public class InteractiveTest {
         try {
             initializeSystem();
             displayWelcomeMessage();
-            runInteractiveSession();
+            new InteractiveTest().runInteractiveSession();
         } catch (Exception e) {
             logger.error("Interactive test execution failed", e);
         } finally {
@@ -194,11 +198,12 @@ public class InteractiveTest {
         System.out.println("- Crashed nodes: " + crashedNodes.size());
         System.out.println("- Clients: " + clients.size());
         System.out.println("- Next node ID: " + nextNodeId);
+        System.out.println("- Replication factor (N): " + dataStoreManager.N + " (W=" + dataStoreManager.W + ", R=" + dataStoreManager.R + ")");
         System.out.println("\nCommands: Type 'help', '?' (fzf), 'search <term>', or 'quit'");
         System.out.println("=".repeat(80) + "\n");
     }
 
-    private static void runInteractiveSession() {
+    private void runInteractiveSession() {
         Scanner scanner = new Scanner(System.in);
         
         while (true) {
@@ -296,7 +301,7 @@ public class InteractiveTest {
         scanner.close();
     }
 
-    private static void handleFzfCommandSearch() {
+    private void handleFzfCommandSearch() {
         List<String> commandOptions = new ArrayList<>();
         
         // Group commands by category for better display
@@ -341,7 +346,7 @@ public class InteractiveTest {
         }
     }
 
-    private static void executeCommand(String fullCommand) {
+    private void executeCommand(String fullCommand) {
         String[] parts = fullCommand.split("\\s+");
         String command = parts[0].toLowerCase();
         
@@ -451,8 +456,14 @@ public class InteractiveTest {
         clients = new ArrayList<>();
         crashedNodes = new ArrayList<>();
         
-        // Create initial 3 nodes
-        for (int i = 1; i <= 3; i++) {
+        // Get the replication factor from DataStoreManager
+        DataStoreManager dsManager = DataStoreManager.getInstance();
+        int initialNodes = Math.max(3, dsManager.N); // Ensure at least N nodes to respect replication constraint
+        
+        logger.info("Creating {} initial nodes to respect replication factor (N={})", initialNodes, dsManager.N);
+        
+        // Create initial nodes (at least N nodes to satisfy replication constraint)
+        for (int i = 1; i <= initialNodes; i++) {
             int nodeId = i * 10;
             ActorRef node = system.actorOf(StorageNode.props(nodeId), "node-" + nodeId);
             nodeRegistry.put(nodeId, node);
@@ -472,7 +483,15 @@ public class InteractiveTest {
         // Wait for initialization
         sleepForOperation(OperationType.CRASH);
         
-        logger.info("System initialized with {} nodes and {} client", nodeRegistry.size(), clients.size());
+        // Validate that we have enough nodes to satisfy replication constraint
+        if (nodeRegistry.size() < dsManager.N) {
+            logger.error("System initialization failed: Created {} nodes but need at least {} nodes for replication factor N={}", 
+                        nodeRegistry.size(), dsManager.N, dsManager.N);
+            throw new IllegalStateException("Insufficient nodes for replication constraint");
+        }
+        
+        logger.info("System initialized with {} nodes and {} client (N={}, W={}, R={})", 
+                   nodeRegistry.size(), clients.size(), dsManager.N, dsManager.W, dsManager.R);
     }
 
     private static void displayHelp() {
@@ -553,6 +572,9 @@ public class InteractiveTest {
         System.out.println("  Max nodes: " + MAX_NODES);
         System.out.println("  Max clients: " + MAX_CLIENTS);
         System.out.println("  Next node ID: " + nextNodeId);
+        System.out.println("  Replication factor (N): " + dataStoreManager.N);
+        System.out.println("  Write quorum (W): " + dataStoreManager.W);
+        System.out.println("  Read quorum (R): " + dataStoreManager.R);
         
         if (!crashedNodes.isEmpty()) {
             System.out.println("\n💥 Crashed nodes: " + crashedNodes);
@@ -792,7 +814,7 @@ public class InteractiveTest {
         }
     }
 
-    private static void handleRemoveNode(String[] parts) {
+    private void handleRemoveNode(String[] parts) {
         if (parts.length < 2) {
             System.out.println("Usage: removenode <nodeId>");
             return;
@@ -809,6 +831,11 @@ public class InteractiveTest {
             
             if (crashedNodes.contains(nodeId)) {
                 System.out.println("❌ Cannot remove crashed node " + nodeId + ". Recover it first or use reset.");
+                return;
+            }
+
+            if (nodeRegistry.size() <= dataStoreManager.N) {
+                System.out.println("❌ Cannot remove node " + nodeId + ". Violates Replication Factor constraint (need at least " + dataStoreManager.N + " nodes)!");
                 return;
             }
             
@@ -1007,7 +1034,7 @@ public class InteractiveTest {
         }
     }
 
-    private static void handleTestScenario(String[] parts) {
+    private void handleTestScenario(String[] parts) {
         if (!validateSystemState("test")) return;
         
         if (parts.length < 2) {
@@ -1172,7 +1199,7 @@ public class InteractiveTest {
         System.out.println("✅ Consistency test completed");
     }
 
-    private static void testMembership() {
+    private void testMembership() {
         System.out.println("🔧 Testing membership operations...");
         
         // Add a new node
@@ -1548,10 +1575,25 @@ public class InteractiveTest {
             return false;
         }
         
+        // Check if we have enough total nodes for replication factor
+        if (nodeRegistry.size() < dataStoreManager.N) {
+            System.out.println("❌ Insufficient nodes for replication constraint: have " + nodeRegistry.size() + 
+                             ", need at least " + dataStoreManager.N + " (N=" + dataStoreManager.N + ")");
+            return false;
+        }
+        
         // Check quorum requirements for critical operations
         if (operation.contains("update") || operation.contains("put")) {
-            if (activeNodes < 2) { // Assuming W=2 from DataStoreManager
-                System.out.println("⚠️  Warning: Not enough active nodes for reliable write operations (need at least 2)");
+            if (activeNodes < dataStoreManager.W) {
+                System.out.println("⚠️  Warning: Not enough active nodes for reliable write operations (need at least " + 
+                                 dataStoreManager.W + " for W=" + dataStoreManager.W + ", have " + activeNodes + ")");
+            }
+        }
+        
+        if (operation.contains("get") || operation.contains("read")) {
+            if (activeNodes < dataStoreManager.R) {
+                System.out.println("⚠️  Warning: Not enough active nodes for reliable read operations (need at least " + 
+                                 dataStoreManager.R + " for R=" + dataStoreManager.R + ", have " + activeNodes + ")");
             }
         }
         

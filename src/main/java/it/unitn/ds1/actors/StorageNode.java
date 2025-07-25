@@ -56,6 +56,8 @@ public class StorageNode extends AbstractActor {
     // Leave operation state
     private LeaveOperation leaveOperation;
 
+    // DataStore Manager
+    private final DataStoreManager dataStoreManager = DataStoreManager.getInstance();
     // ===== NESTED CLASSES =====
 
     private static class GetOperation {
@@ -209,7 +211,7 @@ public class StorageNode extends AbstractActor {
         }
 
         // Add N nodes starting from startIndex (with wrap-around)
-        for (int i = 0; i < DataStoreManager.N && i < nodeIds.size(); i++) {
+        for (int i = 0; i < dataStoreManager.N && i < nodeIds.size(); i++) {
             int index = (startIndex + i) % nodeIds.size();
             Integer nodeId = nodeIds.get(index);
             result.add(nodeRegistry.get(nodeId));
@@ -263,12 +265,14 @@ public class StorageNode extends AbstractActor {
      */
     private boolean releaseLock(int key, String operationId) {
         Set<String> locks = keylocks.get(key);
+        logger.debug("Node {} - releaseLock for operation id {}, current state of locks {}", this.id, operationId, this.keylocks);
         if (locks != null) {
             locks.remove(operationId);
             if (locks.isEmpty()) {
                 keylocks.remove(key);
                 keyLockTypes.remove(key);
             }
+            logger.debug("Node {} - after removal of operation id {}, current state of locks {}", this.id, operationId, this.keylocks);
             return true;
         }
         return false;
@@ -304,6 +308,12 @@ public class StorageNode extends AbstractActor {
         SortedMap<Integer, ActorRef> futureRegistry = new TreeMap<>(this.nodeRegistry);
         futureRegistry.remove(this.id);
 
+        // Cannot Leave if it violates constraints on Replication Factor
+        if (futureRegistry.size() < dataStoreManager.N) {
+            logger.error("Node {} - Abort LEAVE operation -> violating Replication Factor!", this.id);
+            return;
+        }
+
         Set<ActorRef> neededAcks = new HashSet<>();
         for (Integer key : this.dataStore.keySet()) {
             neededAcks.addAll(getNextNNodes(key, futureRegistry));
@@ -320,7 +330,7 @@ public class StorageNode extends AbstractActor {
             this.nodeRegistry.clear();
             getContext().become(initialSpawn());
             logger.info("Node {} - Successfully left the cluster", this.id);
-            return;
+            // Here the program should exit!
         } else {
             for (ActorRef ref : neededAcks) {
                 scheduleMessage(ref, getSelf(), new Messages.NotifyLeave());
@@ -328,8 +338,6 @@ public class StorageNode extends AbstractActor {
             
             scheduleTimeoutMessage(getSelf(), new Messages.Timeout(null, OperationType.LEAVE, -1));
         }
-
-
     }
 
     private void onNotifyLeave(Messages.NotifyLeave msg) {
@@ -372,6 +380,14 @@ public class StorageNode extends AbstractActor {
     }
 
     private void onUpdateNodeRegistry(Messages.UpdateNodeRegistry msg) {
+        
+        // Can't have a dupliKate
+        if (msg.nodeRegistry.containsKey(this.id) && msg.type == UpdateType.JOIN) {
+            logger.error("Node {}({}) - ABORT JOIN -> ID already in use by Node {}({})!", this.id,this.getSelf().path().name(),this.id, msg.nodeRegistry.get(this.id).path().name());
+            getContext().become(initialSpawn());
+            return;
+        }
+        
         this.nodeRegistry.clear();
         this.nodeRegistry.putAll(msg.nodeRegistry);
 
@@ -491,6 +507,10 @@ public class StorageNode extends AbstractActor {
                 handleRecoveryDataItem(key, msg.dataItems.get(key));
             }
         }
+
+        // Need this because if no data is required for the joining node
+        // we did not add it to its nodeRegistry.
+        this.nodeRegistry.put(this.id, getSelf());
     }
 
     private void handleJoinDataItem(Integer key, SortedMap<Integer, ActorRef> futureMap) {
@@ -550,8 +570,14 @@ public class StorageNode extends AbstractActor {
     
     private void onClientUpdate(Messages.ClientUpdate msg) {
         logger.info("Node {} - UPDATE request: key={}, value={}", this.id, msg.key, msg.value);
-        
+
         String operationId = generateOperationId(msg.key);
+        
+        if (msg.key < 0) {
+            logger.error("Node {} - ABORT UPDATE -> keys cannot be negative!", this.id);
+            scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_UPDATE));
+            return;
+        }
 
         if (isOperationBlocked(msg.key, OpType.UPDATE, operationId)) {
             return;
@@ -570,6 +596,12 @@ public class StorageNode extends AbstractActor {
         logger.info("Node {} - GET request: key={}", this.id, msg.key);
         
         String operationId = generateOperationId(msg.key);
+
+        if (msg.key < 0) {
+            logger.error("Node {} - ABORT GET -> keys cannot be negative!", this.id);
+            scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_GET));
+            return;
+        }
 
         if (isLocked(msg.key, OpType.GET)) {
             logger.warn("Node {} - GET rejected: key {} is locked for update at coordinator level", this.id, msg.key);
@@ -605,6 +637,7 @@ public class StorageNode extends AbstractActor {
     private boolean tryAcquireReplicaLock(int key, OpType opType, String operationId, List<ActorRef> nodeList) {
         if (nodeList.contains(getSelf()) && !acquireLock(key, opType, operationId)) {
             logger.warn("Node {} - {} rejected: key {} is locked at replica level", this.id, opType, key);
+            logger.debug("Node {} - Replica Lock State [locks -> {}, types -> {}]", this.id, this.keylocks, this.keyLockTypes);
             scheduleMessage(sender(), getSelf(), 
                           new Messages.Error(key, operationId, 
                                            opType == OpType.UPDATE ? OperationType.CLIENT_UPDATE : OperationType.CLIENT_GET));
@@ -628,6 +661,17 @@ public class StorageNode extends AbstractActor {
             } else {
                 scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(msg.key, operationId, GetType.UPDATE));
             }
+        }
+
+        // This sleep operation ensures that messages are FIFO as the constraint
+        // We encounter a problem where a replica got a update message before the initial read,
+        // leading to a lock that could not be removed. While the actual update was still performed.
+        try {
+            Thread.sleep(Messages.DELAY);
+        } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            logger.error("Node {} - could not execute delay after update!", this.id);
+            e.printStackTrace();
         }
         
         scheduleTimeoutMessage(getSelf(), new Messages.Timeout(operationId, OperationType.CLIENT_UPDATE, msg.key));
@@ -659,8 +703,8 @@ public class StorageNode extends AbstractActor {
         OpType lockType = (msg.getType == GetType.UPDATE) ? OpType.UPDATE : OpType.GET;
         
         if (!acquireLock(msg.key, lockType, msg.operationId)) {
-            logger.warn("Node {} - Cannot execute {} on key {}: locked at replica level", 
-                       this.id, msg.getType, msg.key);
+            logger.warn("Node {} - Cannot execute {} on key {}: locked at replica level", this.id, msg.getType, msg.key);
+            logger.debug("Node {} - Replica Lock State [locks -> {}, types -> {}]", this.id, this.keylocks, this.keyLockTypes);
             return;
         }
 
@@ -704,7 +748,7 @@ public class StorageNode extends AbstractActor {
     }
 
     private void handleUpdateCompletion(GetOperation operation, String operationId) {
-        if (operation.responses.size() >= DataStoreManager.W) {
+        if (operation.responses.size() >= dataStoreManager.W) {
             VersionedValue currentValue = findLatestValue(operation.responses);
             
             VersionedValue newValue = (currentValue == null) 
@@ -722,7 +766,7 @@ public class StorageNode extends AbstractActor {
     }
 
     private void handleGetCompletion(GetOperation operation, String operationId) {
-        if (operation.responses.size() >= DataStoreManager.R) {
+        if (operation.responses.size() >= dataStoreManager.R) {
             VersionedValue latestValue = findLatestValue(operation.responses);
             
             Messages.GetResponse response = new Messages.GetResponse(operation.key, latestValue, operationId);
@@ -733,7 +777,7 @@ public class StorageNode extends AbstractActor {
     }
 
     private void handleInitCompletion(GetOperation operation, String operationId) {
-        if (operation.responses.size() == DataStoreManager.N) {
+        if (operation.responses.size() == dataStoreManager.N) {
             VersionedValue latestValue = findLatestValue(operation.responses);
             
             this.dataStore.put(operation.key, latestValue);
