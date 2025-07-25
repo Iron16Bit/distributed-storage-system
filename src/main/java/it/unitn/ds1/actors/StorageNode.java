@@ -2,7 +2,6 @@ package it.unitn.ds1.actors;
 
 import scala.concurrent.duration.Duration;
 
-import java.rmi.server.Operation;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -894,7 +893,6 @@ public class StorageNode extends AbstractActor {
             logger.error("Node {} - JOIN timeout: cannot contact neighbor", this.id);
         } else {
             logger.debug("Node {} - JOIN timeout ignored (already connected)", this.id);
-            logger.debug("Node {} - Node Registry {}", this.id, this.nodeRegistry);
         }
     }
 
