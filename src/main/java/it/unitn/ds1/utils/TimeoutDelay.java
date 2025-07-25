@@ -1,7 +1,7 @@
 package it.unitn.ds1.utils;
 
 import it.unitn.ds1.Messages;
-import it.unitn.ds1.utils.OperationDelays.OperationType;
+import it.unitn.ds1.types.OperationType;
 
 /**
  * Class containing operation-specific delays for different types of operations
@@ -40,6 +40,7 @@ public class TimeoutDelay {
             case CRASH -> CRASH_DELAY;
             case RECOVERY -> RECOVERY_DELAY;
             case DEBUG_PRINT -> DEBUG_PRINT_DELAY;
+            case INIT -> BASE_DELAY;
         };
     }
 

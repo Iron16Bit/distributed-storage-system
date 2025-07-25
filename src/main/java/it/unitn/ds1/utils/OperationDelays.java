@@ -1,6 +1,7 @@
 package it.unitn.ds1.utils;
 
 import it.unitn.ds1.Messages;
+import it.unitn.ds1.types.OperationType;
 
 /**
  * Class containing operation-specific delays for different types of operations
@@ -39,19 +40,7 @@ public class OperationDelays {
             case CRASH -> CRASH_DELAY;
             case RECOVERY -> RECOVERY_DELAY;
             case DEBUG_PRINT -> DEBUG_PRINT_DELAY;
+            case INIT -> BASE_DELAY;
         };
-    }
-    
-    /**
-     * Enum defining different operation types
-     */
-    public enum OperationType {
-        CLIENT_GET,        // Complete client read operation (quorum read)
-        CLIENT_UPDATE,     // Complete client write operation (read-before-write + quorum write)
-        JOIN,             // Complete node join operation
-        LEAVE,            // Complete node leave operation
-        CRASH,            // Node crash
-        RECOVERY,         // Complete node recovery operation
-        DEBUG_PRINT,      // Debug output delay
     }
 }

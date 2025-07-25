@@ -13,9 +13,8 @@ import akka.actor.ActorSystem;
 
 import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.StorageNode;
-import it.unitn.ds1.types.UpdateType;
+import it.unitn.ds1.types.OperationType;
 import it.unitn.ds1.utils.OperationDelays;
-import it.unitn.ds1.utils.OperationDelays.OperationType;
 
 public class Main {
 
@@ -25,6 +24,8 @@ public class Main {
     private static ActorRef client1, client2, client3;
     private static TreeMap<Integer, ActorRef> nodeRegistry;
     private static ActorRef node1, node5, node7, node10, nodeSystem;
+
+    private static DataStoreManager dataStoreManager = DataStoreManager.getInstance();
 
     // Helper method to print node contents with appropriate delay
     private static void printNodeContents(TreeMap<Integer, ActorRef> nodeRegistry) {
@@ -57,6 +58,8 @@ public class Main {
     private static void initializeSystem() {
         logger.info("Starting Distributed Storage System");
 
+        logger.info("DataStore parameters: N-{}, W-{}, R-{}", dataStoreManager.N, dataStoreManager.W, dataStoreManager.R);
+
         system = ActorSystem.create("Distributed-Storage-System");
 
         node1 = system.actorOf(StorageNode.props(1), "node-1");
@@ -71,11 +74,11 @@ public class Main {
         nodeRegistry.put(10, node10);
 
         logger.info("Initializing node registries...");
-        node1.tell(new Messages.UpdateNodeRegistry(nodeRegistry, UpdateType.INIT), ActorRef.noSender());
-        node5.tell(new Messages.UpdateNodeRegistry(nodeRegistry, UpdateType.INIT), ActorRef.noSender());
-        node10.tell(new Messages.UpdateNodeRegistry(nodeRegistry, UpdateType.INIT), ActorRef.noSender());
+        node1.tell(new Messages.UpdateNodeRegistry(nodeRegistry, OperationType.INIT), ActorRef.noSender());
+        node5.tell(new Messages.UpdateNodeRegistry(nodeRegistry, OperationType.INIT), ActorRef.noSender());
+        node10.tell(new Messages.UpdateNodeRegistry(nodeRegistry, OperationType.INIT), ActorRef.noSender());
 
-        sleepForOperation(OperationType.CRASH);
+        sleepForOperation(OperationType.INIT);
 
         logger.info("Creating client actors...");
         client1 = system.actorOf(Client.props(), "client-1");

@@ -5,10 +5,8 @@ import java.util.Map;
 import java.util.SortedMap;
 
 import akka.actor.ActorRef;
-import it.unitn.ds1.types.GetType;
-import it.unitn.ds1.types.UpdateType;
+import it.unitn.ds1.types.OperationType;
 import it.unitn.ds1.utils.VersionedValue;
-import it.unitn.ds1.utils.OperationDelays.OperationType;
 
 public class Messages {
 
@@ -20,12 +18,12 @@ public class Messages {
 
     public static class Timeout implements Serializable {
         public final String operationId;
-        public final OperationType opType;
+        public final OperationType operationType;
         public final int key;
 
-        public Timeout(String operationId, OperationType opType, int key) {
+        public Timeout(String operationId, OperationType operationType, int key) {
             this.operationId = operationId;
-            this.opType = opType;
+            this.operationType = operationType;
             this.key = key;
         }
     }
@@ -42,21 +40,21 @@ public class Messages {
 
     public static class RequestDataItems implements Serializable{
         public final int askingID;
-        public final UpdateType type;
+        public final OperationType operationType;
     
-        public RequestDataItems(int askingID, UpdateType type) {
+        public RequestDataItems(int askingID, OperationType operationType) {
             this.askingID = askingID;
-            this.type = type;
+            this.operationType = operationType;
         }
     }
 
     public static class DataItemsResponse implements Serializable {
         public final Map<Integer, VersionedValue> dataItems;
-        public final UpdateType type;
+        public final OperationType operationType;
         
-        public DataItemsResponse(Map<Integer, VersionedValue> dataItems, UpdateType type) {
+        public DataItemsResponse(Map<Integer, VersionedValue> dataItems, OperationType operationType) {
             this.dataItems = dataItems;
-            this.type = type;
+            this.operationType = operationType;
         }
     }
 
@@ -146,12 +144,12 @@ public class Messages {
     public static class ReplicaGet implements Serializable {
         public final int key;
         public final String operationId;
-        public final GetType getType;
+        public final OperationType operationType;
 
-        public ReplicaGet(int key, String operationId, GetType getType) {
+        public ReplicaGet(int key, String operationId, OperationType operationType) {
             this.key = key;
             this.operationId = operationId;
-            this.getType = getType;
+            this.operationType = operationType;
         }
     }
 
@@ -168,10 +166,10 @@ public class Messages {
     }
 
     public static class RequestNodeRegistry implements Serializable {
-        public final UpdateType type;
+        public final OperationType operationType;
 
-        public RequestNodeRegistry(UpdateType type) {
-            this.type = type;
+        public RequestNodeRegistry(OperationType operationType) {
+            this.operationType = operationType;
         }
     }
 
@@ -200,11 +198,11 @@ public class Messages {
     // Add this to your Messages class
     public static class UpdateNodeRegistry implements Serializable {
         public final SortedMap<Integer, ActorRef> nodeRegistry;
-        public final UpdateType type;
+        public final OperationType operationType;
         
-        public UpdateNodeRegistry(SortedMap<Integer, ActorRef> nodeRegistry, UpdateType type) {
+        public UpdateNodeRegistry(SortedMap<Integer, ActorRef> nodeRegistry, OperationType operationType) {
             this.nodeRegistry = nodeRegistry;
-            this.type = type;
+            this.operationType = operationType;
         }
     }
     

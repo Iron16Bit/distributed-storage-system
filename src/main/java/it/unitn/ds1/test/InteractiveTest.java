@@ -18,9 +18,8 @@ import it.unitn.ds1.DataStoreManager;
 import it.unitn.ds1.Messages;
 import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.StorageNode;
-import it.unitn.ds1.types.UpdateType;
+import it.unitn.ds1.types.OperationType;
 import it.unitn.ds1.utils.OperationDelays;
-import it.unitn.ds1.utils.OperationDelays.OperationType;
 import it.unitn.ds1.utils.FzfIntegration;
 
 /**
@@ -472,7 +471,7 @@ public class InteractiveTest {
         
         // Initialize node registries
         for (ActorRef node : nodeRegistry.values()) {
-            node.tell(new Messages.UpdateNodeRegistry(nodeRegistry, UpdateType.INIT), ActorRef.noSender());
+            node.tell(new Messages.UpdateNodeRegistry(nodeRegistry, OperationType.INIT), ActorRef.noSender());
         }
         
         // Create initial client and properly set nextClientId
@@ -794,7 +793,7 @@ public class InteractiveTest {
             
             if (nodeRegistry.isEmpty()) {
                 nodeRegistry.put(nodeId, newNode);
-                newNode.tell(new Messages.UpdateNodeRegistry(nodeRegistry, UpdateType.INIT), ActorRef.noSender());
+                newNode.tell(new Messages.UpdateNodeRegistry(nodeRegistry, OperationType.INIT), ActorRef.noSender());
             } else {
                 ActorRef bootstrapPeer = getRandomActiveNode();
                 System.out.println("🔗 Node " + nodeId + " joining via peer " + getNodeId(bootstrapPeer));

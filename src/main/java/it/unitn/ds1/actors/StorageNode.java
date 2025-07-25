@@ -2,6 +2,7 @@ package it.unitn.ds1.actors;
 
 import scala.concurrent.duration.Duration;
 
+import java.rmi.server.Operation;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -21,12 +22,9 @@ import akka.actor.ActorRef;
 import akka.actor.Props;
 import it.unitn.ds1.DataStoreManager;
 import it.unitn.ds1.Messages;
-import it.unitn.ds1.types.GetType;
-import it.unitn.ds1.types.OpType;
-import it.unitn.ds1.types.UpdateType;
+import it.unitn.ds1.types.OperationType;
 import it.unitn.ds1.utils.TimeoutDelay;
 import it.unitn.ds1.utils.VersionedValue;
-import it.unitn.ds1.utils.OperationDelays.OperationType;
 
 /**
  * Storage node implementation for the distributed key-value storage system.
@@ -51,28 +49,29 @@ public class StorageNode extends AbstractActor {
 
     // Locking mechanism
     private final Map<Integer, Set<String>> keylocks = new HashMap<>();
-    private final Map<Integer, OpType> keyLockTypes = new HashMap<>();
+    private final Map<Integer, OperationType> keyLockTypes = new HashMap<>();
 
     // Leave operation state
     private LeaveOperation leaveOperation;
 
     // DataStore Manager
     private final DataStoreManager dataStoreManager = DataStoreManager.getInstance();
+    
     // ===== NESTED CLASSES =====
-
+    
     private static class GetOperation {
         final int key;
         final ActorRef client;
         final List<VersionedValue> responses;
         final String updateValue;
-        final GetType getType;
+        final OperationType operationType;
 
-        GetOperation(int key, ActorRef client, GetType getType) {
+        GetOperation(int key, ActorRef client, OperationType operationType) {
             this.key = key;
             this.client = client;
             this.responses = new ArrayList<>();
             this.updateValue = null;
-            this.getType = getType;
+            this.operationType = operationType;
         }
 
         GetOperation(int key, ActorRef client, String updateValue) {
@@ -80,7 +79,7 @@ public class StorageNode extends AbstractActor {
             this.client = client;
             this.responses = new ArrayList<>();
             this.updateValue = updateValue;
-            this.getType = GetType.UPDATE;
+            this.operationType = OperationType.CLIENT_UPDATE;
         }
     }
 
@@ -152,7 +151,6 @@ public class StorageNode extends AbstractActor {
             .match(Messages.ClientGet.class, this::onClientGet)
             .match(Messages.ReplicaGet.class, this::onReplicaGet)
             .match(Messages.GetResponse.class, this::onGetResponse)
-            .match(Messages.Recovery.class, this::onRecovery)
             .match(Messages.Timeout.class, this::onTimeout)
             .match(Messages.DebugPrintDataStore.class, this::onDebugPrintDataStore)
             .matchAny(msg -> logger.warn("Node {} - Unhandled message: {}", this.id, msg.getClass().getSimpleName()))
@@ -179,7 +177,7 @@ public class StorageNode extends AbstractActor {
 
     private void scheduleTimeoutMessage(ActorRef ref, Messages.Timeout msg) {
         getContext().system().scheduler().scheduleOnce(
-            Duration.create(TimeoutDelay.getDelayForOperation(msg.opType), TimeUnit.MILLISECONDS),
+            Duration.create(TimeoutDelay.getDelayForOperation(msg.operationType), TimeUnit.MILLISECONDS),
             ref, msg,
             getContext().system().dispatcher(), ref
         );
@@ -211,7 +209,8 @@ public class StorageNode extends AbstractActor {
         }
 
         // Add N nodes starting from startIndex (with wrap-around)
-        for (int i = 0; i < dataStoreManager.N && i < nodeIds.size(); i++) {
+        // logger.info("DataStoreManager: {}", this.dataStoreManager);
+        for (int i = 0; i < this.dataStoreManager.N && i < nodeIds.size(); i++) {
             int index = (startIndex + i) % nodeIds.size();
             Integer nodeId = nodeIds.get(index);
             result.add(nodeRegistry.get(nodeId));
@@ -225,34 +224,38 @@ public class StorageNode extends AbstractActor {
     /**
      * Check if a key is locked at the coordinator level
      */
-    private boolean isLocked(int key, OpType op) {
+    private boolean isLocked(int key, OperationType operationType) {
         String pattern = "-" + key + "-";
         
-        return switch (op) {
-            case GET -> pendingUpdate.keySet().stream()
+        return switch (operationType) {
+            case CLIENT_GET -> pendingUpdate.keySet().stream()
                     .anyMatch(operationId -> operationId.contains(pattern));
             
-            case UPDATE -> pendingUpdate.keySet().stream()
+            case CLIENT_UPDATE -> pendingUpdate.keySet().stream()
                     .anyMatch(operationId -> operationId.contains(pattern)) ||
                     pendingGet.keySet().stream()
                     .anyMatch(operationId -> operationId.contains(pattern));
+            default -> {
+                logger.error("Node {} - checking for lock with wrong type", this.id);
+                yield false;
+            }
         };
     }
     
     /**
      * Acquire a lock at the replica level
      */
-    private boolean acquireLock(int key, OpType op, String operationId) {
+    private boolean acquireLock(int key, OperationType operationType, String operationId) {
         Set<String> locks = keylocks.computeIfAbsent(key, k -> new HashSet<>());
-        OpType currentLockType = keyLockTypes.get(key);
+        OperationType currentLockType = keyLockTypes.get(key);
 
         if (locks.isEmpty()) {
             locks.add(operationId);
-            keyLockTypes.put(key, op);
+            keyLockTypes.put(key, operationType);
             return true;
         }
 
-        if (currentLockType == OpType.GET && op == OpType.GET) {
+        if (currentLockType == OperationType.CLIENT_GET && operationType == OperationType.CLIENT_GET) {
             locks.add(operationId);
             return true;
         }
@@ -298,7 +301,7 @@ public class StorageNode extends AbstractActor {
     private void onJoin(Messages.Join msg) {
         getContext().become(createReceive());
         logger.info("Node {} - Initiating JOIN operation", this.id);
-        scheduleMessage(msg.bootstrappingPeer, getSelf(), new Messages.RequestNodeRegistry(UpdateType.JOIN));
+        scheduleMessage(msg.bootstrappingPeer, getSelf(), new Messages.RequestNodeRegistry(OperationType.JOIN));
         scheduleTimeoutMessage(getSelf(), new Messages.Timeout(null, OperationType.JOIN, -1));
     }
 
@@ -369,20 +372,20 @@ public class StorageNode extends AbstractActor {
     private void onRecovery(Messages.Recovery msg) {
         getContext().become(createReceive());
         logger.info("Node {} - Recovering from crash", this.id);
-        scheduleMessage(msg.recoveryNode, getSelf(), new Messages.RequestNodeRegistry(UpdateType.RECOVERY));
+        scheduleMessage(msg.recoveryNode, getSelf(), new Messages.RequestNodeRegistry(OperationType.RECOVERY));
     }
 
     // ===== MESSAGE HANDLERS - REGISTRY MANAGEMENT =====
     
     private void onRequestNodeRegistry(Messages.RequestNodeRegistry msg) {
-        logger.debug("Node {} - Received node registry request of type {}", this.id, msg.type);
-        scheduleMessage(sender(), getSelf(), new Messages.UpdateNodeRegistry(this.nodeRegistry, msg.type));
+        logger.debug("Node {} - Received node registry request of type {}", this.id, msg.operationType);
+        scheduleMessage(sender(), getSelf(), new Messages.UpdateNodeRegistry(this.nodeRegistry, msg.operationType));
     }
 
     private void onUpdateNodeRegistry(Messages.UpdateNodeRegistry msg) {
         
         // Can't have a dupliKate
-        if (msg.nodeRegistry.containsKey(this.id) && msg.type == UpdateType.JOIN) {
+        if (msg.nodeRegistry.containsKey(this.id) && msg.operationType == OperationType.JOIN) {
             logger.error("Node {}({}) - ABORT JOIN -> ID already in use by Node {}({})!", this.id,this.getSelf().path().name(),this.id, msg.nodeRegistry.get(this.id).path().name());
             getContext().become(initialSpawn());
             return;
@@ -391,11 +394,11 @@ public class StorageNode extends AbstractActor {
         this.nodeRegistry.clear();
         this.nodeRegistry.putAll(msg.nodeRegistry);
 
-        switch (msg.type) {
+        switch (msg.operationType) {
             case INIT -> handleInitUpdate();
             case RECOVERY -> handleRecoveryUpdate();
             case JOIN -> handleJoinUpdate();
-            default -> logger.warn("Node {} - Unknown registry update type: {}", this.id, msg.type);
+            default -> logger.warn("Node {} - Unknown registry update type: {}", this.id, msg.operationType);
         }
 
         logger.info("Node {} - Registry updated: now tracking {} nodes", this.id, this.nodeRegistry.size());
@@ -411,7 +414,7 @@ public class StorageNode extends AbstractActor {
         ActorRef neighbor = findNeighborForRecovery();
         if (neighbor != null) {
             logger.info("Node {} - Recovery: requesting data items from neighbor", this.id);
-            scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, UpdateType.RECOVERY));
+            scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, OperationType.RECOVERY));
         }
         cleanupObsoleteData();
     }
@@ -420,7 +423,7 @@ public class StorageNode extends AbstractActor {
         ActorRef neighbor = findNeighborForJoin();
         if (neighbor != null) {
             logger.info("Node {} - JOIN: requesting data items from neighbor", this.id);
-            scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, UpdateType.JOIN));
+            scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, OperationType.JOIN));
         }
     }
 
@@ -493,16 +496,19 @@ public class StorageNode extends AbstractActor {
     private void onRequestDataItems(Messages.RequestDataItems msg) {
         logger.debug("Node {} - Received data items request from node {}", this.id, msg.askingID);
         Map<Integer, VersionedValue> requestedDataItems = new TreeMap<>(this.dataStore);
-        scheduleMessage(sender(), getSelf(), new Messages.DataItemsResponse(requestedDataItems, msg.type));
+        scheduleMessage(sender(), getSelf(), new Messages.DataItemsResponse(requestedDataItems, msg.operationType));
     }
 
     private void onDataItemsResponse(Messages.DataItemsResponse msg) {
         SortedMap<Integer, ActorRef> futureMap = new TreeMap<>(this.nodeRegistry);
         futureMap.put(this.id, getSelf());
 
+        boolean hasAskedItems = false;
+
         for (Integer key : msg.dataItems.keySet()) {
-            if (msg.type == UpdateType.JOIN) {
+            if (msg.operationType == OperationType.JOIN && getNextNNodes(key, futureMap).contains(getSelf())) {
                 handleJoinDataItem(key, futureMap);
+                hasAskedItems = true;
             } else {
                 handleRecoveryDataItem(key, msg.dataItems.get(key));
             }
@@ -510,7 +516,16 @@ public class StorageNode extends AbstractActor {
 
         // Need this because if no data is required for the joining node
         // we did not add it to its nodeRegistry.
-        this.nodeRegistry.put(this.id, getSelf());
+        if (msg.operationType == OperationType.JOIN) {
+            this.nodeRegistry.put(this.id, getSelf());
+            if (!hasAskedItems) {
+                for (ActorRef ref : nodeRegistry.values()) {
+                    if (ref != getSelf()) {
+                        scheduleMessage(ref, getSelf(), new Messages.Announce(this.id));
+                    } 
+                }
+            }
+        }
     }
 
     private void handleJoinDataItem(Integer key, SortedMap<Integer, ActorRef> futureMap) {
@@ -519,13 +534,13 @@ public class StorageNode extends AbstractActor {
         }
 
         String operationId = this.id + "-" + key + "-" + (++this.operationCounter);
-        GetOperation getOperation = new GetOperation(key, getSelf(), GetType.INIT);
+        GetOperation getOperation = new GetOperation(key, getSelf(), OperationType.JOIN);
         pendingGet.put(operationId, getOperation);
         
         logger.debug("Node {} - Requesting initial data for key {} during JOIN", this.id, key);
         List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
         for (ActorRef ref : nNodes) {
-            scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(key, operationId, GetType.INIT));
+            scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(key, operationId, OperationType.JOIN));
         }
     }
 
@@ -579,13 +594,13 @@ public class StorageNode extends AbstractActor {
             return;
         }
 
-        if (isOperationBlocked(msg.key, OpType.UPDATE, operationId)) {
+        if (isOperationBlocked(msg.key, OperationType.CLIENT_UPDATE, operationId)) {
             return;
         }
 
         List<ActorRef> nodeList = getNextNNodes(msg.key, this.nodeRegistry);
         
-        if (!tryAcquireReplicaLock(msg.key, OpType.UPDATE, operationId, nodeList)) {
+        if (!tryAcquireReplicaLock(msg.key, OperationType.CLIENT_UPDATE, operationId, nodeList)) {
             return;
         }
 
@@ -603,15 +618,16 @@ public class StorageNode extends AbstractActor {
             return;
         }
 
-        if (isLocked(msg.key, OpType.GET)) {
+        if (isLocked(msg.key, OperationType.CLIENT_GET)) {
             logger.warn("Node {} - GET rejected: key {} is locked for update at coordinator level", this.id, msg.key);
             scheduleMessage(sender(), getSelf(), new Messages.Error(msg.key, operationId, OperationType.CLIENT_GET));
             return;
         }
 
         List<ActorRef> nodeList = getNextNNodes(msg.key, this.nodeRegistry);
+
         
-        if (!tryAcquireReplicaLock(msg.key, OpType.GET, operationId, nodeList)) {
+        if (!tryAcquireReplicaLock(msg.key, OperationType.CLIENT_GET, operationId, nodeList)) {
             return;
         }
 
@@ -622,25 +638,21 @@ public class StorageNode extends AbstractActor {
         return this.id + "-" + key + "-" + (++operationCounter);
     }
 
-    private boolean isOperationBlocked(int key, OpType opType, String operationId) {
-        if (isLocked(key, opType)) {
+    private boolean isOperationBlocked(int key, OperationType operationType, String operationId) {
+        if (isLocked(key, operationType)) {
             logger.warn("Node {} - {} rejected: key {} is locked at coordinator level", 
-                       this.id, opType, key);
-            scheduleMessage(sender(), getSelf(), 
-                          new Messages.Error(key, operationId, 
-                                           opType == OpType.UPDATE ? OperationType.CLIENT_UPDATE : OperationType.CLIENT_GET));
+                       this.id, operationType, key);
+            scheduleMessage(sender(), getSelf(), new Messages.Error(key, operationId, operationType));
             return true;
         }
         return false;
     }
 
-    private boolean tryAcquireReplicaLock(int key, OpType opType, String operationId, List<ActorRef> nodeList) {
-        if (nodeList.contains(getSelf()) && !acquireLock(key, opType, operationId)) {
-            logger.warn("Node {} - {} rejected: key {} is locked at replica level", this.id, opType, key);
+    private boolean tryAcquireReplicaLock(int key, OperationType operationType, String operationId, List<ActorRef> nodeList) {
+        if (nodeList.contains(getSelf()) && !acquireLock(key, operationType, operationId)) {
+            logger.warn("Node {} - {} rejected: key {} is locked at replica level", this.id, operationType, key);
             logger.debug("Node {} - Replica Lock State [locks -> {}, types -> {}]", this.id, this.keylocks, this.keyLockTypes);
-            scheduleMessage(sender(), getSelf(), 
-                          new Messages.Error(key, operationId, 
-                                           opType == OpType.UPDATE ? OperationType.CLIENT_UPDATE : OperationType.CLIENT_GET));
+            scheduleMessage(sender(), getSelf(), new Messages.Error(key, operationId, operationType));
             return false;
         }
         return true;
@@ -659,7 +671,7 @@ public class StorageNode extends AbstractActor {
                 getOperation.responses.add(localValue);
                 logger.debug("Node {} - Local read for update: key={}, value={}", this.id, msg.key, localValue);
             } else {
-                scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(msg.key, operationId, GetType.UPDATE));
+                scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(msg.key, operationId, OperationType.CLIENT_UPDATE));
             }
         }
 
@@ -679,7 +691,7 @@ public class StorageNode extends AbstractActor {
     }
 
     private void startGetOperation(Messages.ClientGet msg, String operationId, List<ActorRef> nodeList) {
-        GetOperation operation = new GetOperation(msg.key, sender(), GetType.GET);
+        GetOperation operation = new GetOperation(msg.key, sender(), OperationType.CLIENT_GET);
         pendingGet.put(operationId, operation);
     
         for (ActorRef ref : nodeList) {
@@ -689,7 +701,7 @@ public class StorageNode extends AbstractActor {
                 logger.debug("Node {} - Local GET: key={}, value={}", this.id, msg.key, localValue);
                 releaseLock(msg.key, operationId);
             } else {
-                scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(msg.key, operationId, GetType.GET));
+                scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(msg.key, operationId, OperationType.CLIENT_GET));
             }
         }
 
@@ -700,19 +712,22 @@ public class StorageNode extends AbstractActor {
     // ===== MESSAGE HANDLERS - REPLICA OPERATIONS =====
     
     private void onReplicaGet(Messages.ReplicaGet msg) {
-        OpType lockType = (msg.getType == GetType.UPDATE) ? OpType.UPDATE : OpType.GET;
+
+        OperationType operationType = msg.operationType == OperationType.JOIN ? OperationType.CLIENT_GET : msg.operationType; 
         
-        if (!acquireLock(msg.key, lockType, msg.operationId)) {
-            logger.warn("Node {} - Cannot execute {} on key {}: locked at replica level", this.id, msg.getType, msg.key);
+        if (!acquireLock(msg.key, operationType, msg.operationId)) {
+            logger.warn("Node {} - Cannot execute {} on key {}: locked at replica level", this.id, operationType, msg.key);
             logger.debug("Node {} - Replica Lock State [locks -> {}, types -> {}]", this.id, this.keylocks, this.keyLockTypes);
             return;
         }
 
         VersionedValue requestedValue = get(msg.key);
         logger.debug("Node {} - Replica GET: key={}, value={}, type={}", 
-                    this.id, msg.key, requestedValue, msg.getType);
+                    this.id, msg.key, requestedValue, msg.operationType);
         
-        if (msg.getType == GetType.GET || msg.getType == GetType.INIT) {
+
+        // Already contains the INIT type for the ternary operator above
+        if (msg.operationType == OperationType.CLIENT_GET || msg.operationType == OperationType.JOIN) {
             releaseLock(msg.key, msg.operationId);
         }
 
@@ -740,10 +755,11 @@ public class StorageNode extends AbstractActor {
         GetOperation operation = pendingGet.get(operationId);
         if (operation == null) return;
 
-        switch (operation.getType) {
-            case UPDATE -> handleUpdateCompletion(operation, operationId);
-            case GET -> handleGetCompletion(operation, operationId);
-            case INIT -> handleInitCompletion(operation, operationId);
+        switch (operation.operationType) {
+            case CLIENT_UPDATE -> handleUpdateCompletion(operation, operationId);
+            case CLIENT_GET -> handleGetCompletion(operation, operationId);
+            case JOIN -> handleJoinCompletion(operation, operationId);
+            default -> logger.error("Node {} - tried a GET in order to complete operation {}", this.id, operation.operationType);
         }
     }
 
@@ -776,15 +792,15 @@ public class StorageNode extends AbstractActor {
         }
     }
 
-    private void handleInitCompletion(GetOperation operation, String operationId) {
+    private void handleJoinCompletion(GetOperation operation, String operationId) {
         if (operation.responses.size() == dataStoreManager.N) {
             VersionedValue latestValue = findLatestValue(operation.responses);
             
             this.dataStore.put(operation.key, latestValue);
             pendingGet.remove(operationId);
             
+            logger.debug("Node {} - JOIN: acquired key {} with value {}", this.id, operation.key, latestValue);
             if (!this.nodeRegistry.containsKey(this.id)) {
-                logger.debug("Node {} - JOIN: acquired key {} with value {}", this.id, operation.key, latestValue);
                 this.nodeRegistry.put(this.id, getSelf());
                 
                 for (ActorRef ref : nodeRegistry.values()) {
@@ -833,12 +849,12 @@ public class StorageNode extends AbstractActor {
     // ===== MESSAGE HANDLERS - ERROR HANDLING =====
     
     private void onTimeout(Messages.Timeout msg) {
-        switch (msg.opType) {
+        switch (msg.operationType) {
             case CLIENT_GET -> handleGetTimeout(msg);
             case CLIENT_UPDATE -> handleUpdateTimeout(msg);
             case JOIN -> handleJoinTimeout();
             case LEAVE -> handleLeaveTimeout();
-            default -> logger.debug("Node {} - Unhandled timeout for operation type {}", this.id, msg.opType);
+            default -> logger.debug("Node {} - Unhandled timeout for operation type {}", this.id, msg.operationType);
         }
     }
 
@@ -878,6 +894,7 @@ public class StorageNode extends AbstractActor {
             logger.error("Node {} - JOIN timeout: cannot contact neighbor", this.id);
         } else {
             logger.debug("Node {} - JOIN timeout ignored (already connected)", this.id);
+            logger.debug("Node {} - Node Registry {}", this.id, this.nodeRegistry);
         }
     }
 
