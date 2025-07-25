@@ -458,7 +458,7 @@ public class InteractiveTest {
         
         // Get the replication factor from DataStoreManager
         DataStoreManager dsManager = DataStoreManager.getInstance();
-        int initialNodes = Math.max(3, dsManager.N); // Ensure at least N nodes to respect replication constraint
+        int initialNodes = dsManager.N; // Ensure at least N nodes to respect replication constraint
         
         logger.info("Creating {} initial nodes to respect replication factor (N={})", initialNodes, dsManager.N);
         
