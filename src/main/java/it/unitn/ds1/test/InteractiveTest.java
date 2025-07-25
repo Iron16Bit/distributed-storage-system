@@ -620,6 +620,8 @@ public class InteractiveTest {
     }
 
     private static void handleGet(String[] parts) {
+        if (!validateSystemState("get")) return;
+        
         if (parts.length < 2) {
             System.out.println("Usage: get <key> [nodeId] [clientId]");
             return;
@@ -627,8 +629,28 @@ public class InteractiveTest {
         
         try {
             int key = Integer.parseInt(parts[1]);
+            
+            // Add range validation for key
+            if (key < 0) {
+                System.out.println("❌ Key must be non-negative");
+                return;
+            }
+            
             ActorRef node = parts.length > 2 ? getNodeById(Integer.parseInt(parts[2])) : getRandomActiveNode();
             ActorRef client = parts.length > 3 ? getClientById(Integer.parseInt(parts[3])) : getRandomClient();
+            
+            // Enhanced validation
+            if (parts.length > 2) {
+                int nodeId = Integer.parseInt(parts[2]);
+                if (!nodeRegistry.containsKey(nodeId)) {
+                    System.out.println("❌ Node " + nodeId + " does not exist");
+                    return;
+                }
+                if (crashedNodes.contains(nodeId)) {
+                    System.out.println("❌ Node " + nodeId + " is crashed and cannot process requests");
+                    return;
+                }
+            }
             
             if (node == null) {
                 System.out.println("❌ No active nodes available or invalid node ID");
@@ -645,11 +667,13 @@ public class InteractiveTest {
             sleepForOperation(OperationType.CLIENT_GET);
             
         } catch (NumberFormatException e) {
-            System.out.println("❌ Invalid number format");
+            System.out.println("❌ Invalid number format: " + e.getMessage());
         }
     }
 
     private static void handleUpdate(String[] parts) {
+        if (!validateSystemState("update")) return;
+        
         if (parts.length < 3) {
             System.out.println("Usage: put <key> <value> [nodeId] [clientId]");
             return;
@@ -657,9 +681,36 @@ public class InteractiveTest {
         
         try {
             int key = Integer.parseInt(parts[1]);
+            
+            // Add range validation for key
+            if (key < 0) {
+                System.out.println("❌ Key must be non-negative");
+                return;
+            }
+            
             String value = parts[2];
+            
+            // Validate value length
+            if (value.length() > 1000) {
+                System.out.println("❌ Value too long (max: 1000 characters)");
+                return;
+            }
+            
             ActorRef node = parts.length > 3 ? getNodeById(Integer.parseInt(parts[3])) : getRandomActiveNode();
             ActorRef client = parts.length > 4 ? getClientById(Integer.parseInt(parts[4])) : getRandomClient();
+            
+            // Enhanced validation
+            if (parts.length > 3) {
+                int nodeId = Integer.parseInt(parts[3]);
+                if (!nodeRegistry.containsKey(nodeId)) {
+                    System.out.println("❌ Node " + nodeId + " does not exist");
+                    return;
+                }
+                if (crashedNodes.contains(nodeId)) {
+                    System.out.println("❌ Node " + nodeId + " is crashed and cannot process requests");
+                    return;
+                }
+            }
             
             if (node == null) {
                 System.out.println("❌ No active nodes available or invalid node ID");
@@ -681,22 +732,48 @@ public class InteractiveTest {
     }
 
     private static void handleAddNode(String[] parts) {
+        if (system == null) {
+            System.out.println("❌ System is not initialized");
+            return;
+        }
+        
         try {
             int nodeId = parts.length > 1 ? Integer.parseInt(parts[1]) : nextNodeId;
+            
+            // Validate node ID range
+            if (nodeId <= 0) {
+                System.out.println("❌ Node ID must be positive");
+                return;
+            }
+            
+            if (nodeId > 1000) {
+                System.out.println("❌ Node ID too large (max: 1000)");
+                return;
+            }
             
             if (nodeRegistry.containsKey(nodeId)) {
                 System.out.println("❌ Node " + nodeId + " already exists");
                 return;
             }
             
+            // Check system limits
+            if (nodeRegistry.size() >= MAX_NODES) {
+                System.out.println("❌ Maximum number of nodes (" + MAX_NODES + ") reached");
+                return;
+            }
+            
+            // Check if we have enough active nodes for bootstrap
+            if (!nodeRegistry.isEmpty() && getRandomActiveNode() == null) {
+                System.out.println("❌ No active nodes available for bootstrap");
+                return;
+            }
+            
             ActorRef newNode = system.actorOf(StorageNode.props(nodeId), "node-" + nodeId);
             
             if (nodeRegistry.isEmpty()) {
-                // First node - initialize directly
                 nodeRegistry.put(nodeId, newNode);
                 newNode.tell(new Messages.UpdateNodeRegistry(nodeRegistry, UpdateType.INIT), ActorRef.noSender());
             } else {
-                // Join via existing node
                 ActorRef bootstrapPeer = getRandomActiveNode();
                 System.out.println("🔗 Node " + nodeId + " joining via peer " + getNodeId(bootstrapPeer));
                 newNode.tell(new Messages.Join(bootstrapPeer), ActorRef.noSender());
@@ -708,7 +785,10 @@ public class InteractiveTest {
             System.out.println("✅ Node " + nodeId + " added successfully");
             
         } catch (NumberFormatException e) {
-            System.out.println("❌ Invalid node ID format");
+            System.out.println("❌ Invalid node ID format: " + e.getMessage());
+        } catch (Exception e) {
+            System.out.println("❌ Failed to create node: " + e.getMessage());
+            logger.error("Node creation failed", e);
         }
     }
 
@@ -744,6 +824,8 @@ public class InteractiveTest {
     }
 
     private static void handleCrash(String[] parts) {
+        if (!validateSystemState("crash")) return;
+        
         if (parts.length < 2) {
             System.out.println("Usage: crash <nodeId>");
             return;
@@ -775,6 +857,8 @@ public class InteractiveTest {
     }
 
     private static void handleRecover(String[] parts) {
+        if (!validateSystemState("recover")) return;
+        
         if (parts.length < 2) {
             System.out.println("Usage: recover <nodeId> [peerNodeId]");
             return;
@@ -785,20 +869,35 @@ public class InteractiveTest {
             ActorRef node = nodeRegistry.get(nodeId);
             
             if (node == null) {
-                System.out.println("❌ Node " + nodeId + " not found");
+                System.out.println("❌ Node " + nodeId + " not found in registry");
                 return;
             }
             
             if (!crashedNodes.contains(nodeId)) {
-                System.out.println("❌ Node " + nodeId + " is not crashed");
+                System.out.println("❌ Node " + nodeId + " is not crashed (current state: ACTIVE)");
                 return;
             }
             
-            ActorRef recoveryPeer = parts.length > 2 ? 
-                getNodeById(Integer.parseInt(parts[2])) : getRandomActiveNode();
+            // Validate peer node if specified
+            ActorRef recoveryPeer;
+            if (parts.length > 2) {
+                int peerNodeId = Integer.parseInt(parts[2]);
+                if (!nodeRegistry.containsKey(peerNodeId)) {
+                    System.out.println("❌ Peer node " + peerNodeId + " does not exist");
+                    return;
+                }
+                if (crashedNodes.contains(peerNodeId)) {
+                    System.out.println("❌ Peer node " + peerNodeId + " is crashed, cannot serve as recovery peer");
+                    return;
+                }
+                recoveryPeer = nodeRegistry.get(peerNodeId);
+            } else {
+                recoveryPeer = getRandomActiveNode();
+            }
             
             if (recoveryPeer == null) {
                 System.out.println("❌ No active recovery peer available");
+                System.out.println("💡 Try specifying a specific peer node ID");
                 return;
             }
             
@@ -809,7 +908,10 @@ public class InteractiveTest {
             System.out.println("✅ Node " + nodeId + " recovered");
             
         } catch (NumberFormatException e) {
-            System.out.println("❌ Invalid node ID");
+            System.out.println("❌ Invalid node ID format: " + e.getMessage());
+        } catch (Exception e) {
+            System.out.println("❌ Recovery failed: " + e.getMessage());
+            logger.error("Node recovery failed", e);
         }
     }
 
@@ -906,6 +1008,8 @@ public class InteractiveTest {
     }
 
     private static void handleTestScenario(String[] parts) {
+        if (!validateSystemState("test")) return;
+        
         if (parts.length < 2) {
             System.out.println("Usage: test <scenario>");
             System.out.println("Available scenarios: basic, quorum, concurrency, consistency, membership, partition, recovery, edge-cases");
@@ -1221,7 +1325,19 @@ public class InteractiveTest {
     }
 
     private static void handleBenchmark(String[] parts) {
-        int numOperations = parts.length > 1 ? Integer.parseInt(parts[1]) : 100;
+        if (!validateSystemState("benchmark")) return;
+        
+        int numOperations;
+        try {
+            numOperations = parts.length > 1 ? Integer.parseInt(parts[1]) : 100;
+            if (numOperations <= 0 || numOperations > 10000) {
+                System.out.println("❌ Number of operations must be between 1 and 10000");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            System.out.println("❌ Invalid number format for operations count");
+            return;
+        }
         
         System.out.println("⚡ Running benchmark with " + numOperations + " operations...");
         
@@ -1260,7 +1376,19 @@ public class InteractiveTest {
     }
 
     private static void handleStressTest(String[] parts) {
-        int duration = parts.length > 1 ? Integer.parseInt(parts[1]) : 30;
+        if (!validateSystemState("stress test")) return;
+        
+        int duration;
+        try {
+            duration = parts.length > 1 ? Integer.parseInt(parts[1]) : 30;
+            if (duration <= 0 || duration > 300) {
+                System.out.println("❌ Duration must be between 1 and 300 seconds");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            System.out.println("❌ Invalid duration format");
+            return;
+        }
         
         System.out.println("⚡ Running stress test for " + duration + " seconds...");
         
@@ -1397,4 +1525,37 @@ public class InteractiveTest {
             system.terminate();
         }
     }
+
+    private static boolean validateSystemState(String operation) {
+        if (system == null) {
+            System.out.println("❌ System is not initialized or has been terminated");
+            return false;
+        }
+        
+        if (nodeRegistry.isEmpty()) {
+            System.out.println("❌ No nodes in the system");
+            return false;
+        }
+        
+        if (clients.isEmpty()) {
+            System.out.println("❌ No clients in the system");
+            return false;
+        }
+        
+        int activeNodes = nodeRegistry.size() - crashedNodes.size();
+        if (activeNodes == 0) {
+            System.out.println("❌ No active nodes available for " + operation);
+            return false;
+        }
+        
+        // Check quorum requirements for critical operations
+        if (operation.contains("update") || operation.contains("put")) {
+            if (activeNodes < 2) { // Assuming W=2 from DataStoreManager
+                System.out.println("⚠️  Warning: Not enough active nodes for reliable write operations (need at least 2)");
+            }
+        }
+        
+        return true;
+    }
+
 }
