@@ -13,9 +13,8 @@ import akka.actor.ActorSystem;
 import it.unitn.ds1.Messages;
 import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.StorageNode;
-import it.unitn.ds1.types.UpdateType;
+import it.unitn.ds1.types.OperationType;
 import it.unitn.ds1.utils.OperationDelays;
-import it.unitn.ds1.utils.OperationDelays.OperationType;
 
 public class LargeScaleTest {
 
@@ -87,7 +86,7 @@ public class LargeScaleTest {
         // Initialize the first 10 nodes
         logger.info("Initializing {} initial nodes...", INITIAL_NODES);
         for (Map.Entry<Integer, ActorRef> entry : nodeRegistry.entrySet()) {
-            entry.getValue().tell(new Messages.UpdateNodeRegistry(nodeRegistry, UpdateType.INIT), ActorRef.noSender());
+            entry.getValue().tell(new Messages.UpdateNodeRegistry(nodeRegistry, OperationType.INIT), ActorRef.noSender());
         }
 
         sleepForOperation(OperationType.CRASH);

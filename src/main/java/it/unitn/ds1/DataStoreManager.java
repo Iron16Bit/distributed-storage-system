@@ -45,7 +45,7 @@ public class DataStoreManager {
     public static DataStoreManager getInstance() {
         if (instance == null) {
             // Default initialization if not explicitly initialized
-            instance = new DataStoreManager(10, 7, 6);
+            instance = new DataStoreManager(3, 2, 2);
         }
         return instance;
     }
