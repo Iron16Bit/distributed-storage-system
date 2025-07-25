@@ -312,11 +312,24 @@ public class StorageNode extends AbstractActor {
         logger.debug("Node {} - Waiting for {} ACKs to leave", this.id, neededAcks.size());
         this.leaveOperation = new LeaveOperation(neededAcks);
         
-        for (ActorRef ref : neededAcks) {
-            scheduleMessage(ref, getSelf(), new Messages.NotifyLeave());
+        if (neededAcks.isEmpty()) {
+            logger.info("Node {} - No ACKs needed, proceeding with leave", this.id);
+            for (ActorRef ref : this.nodeRegistry.values()) {
+                scheduleMessage(ref, getSelf(), new Messages.RepartitionData(this.id, this.dataStore));
+            }
+            this.nodeRegistry.clear();
+            getContext().become(initialSpawn());
+            logger.info("Node {} - Successfully left the cluster", this.id);
+            return;
+        } else {
+            for (ActorRef ref : neededAcks) {
+                scheduleMessage(ref, getSelf(), new Messages.NotifyLeave());
+            }
+            
+            scheduleTimeoutMessage(getSelf(), new Messages.Timeout(null, OperationType.LEAVE, -1));
         }
-        
-        scheduleTimeoutMessage(getSelf(), new Messages.Timeout(null, OperationType.LEAVE, -1));
+
+
     }
 
     private void onNotifyLeave(Messages.NotifyLeave msg) {
@@ -331,7 +344,7 @@ public class StorageNode extends AbstractActor {
 
         if (leaveOperation.receivedAcks.equals(leaveOperation.neededAcks)) {
             logger.info("Node {} - All ACKs received, proceeding with leave", this.id);
-            for (ActorRef ref : leaveOperation.receivedAcks) {
+            for (ActorRef ref : this.nodeRegistry.values()) {
                 scheduleMessage(ref, getSelf(), new Messages.RepartitionData(this.id, this.dataStore));
             }
             this.nodeRegistry.clear();
