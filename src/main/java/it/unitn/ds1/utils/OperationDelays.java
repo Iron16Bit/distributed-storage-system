@@ -16,8 +16,8 @@ public class OperationDelays {
     private static final int BASE_DELAY = Messages.DELAY;
     
     // Complete client operation delays (end-to-end)
-    public static final int CLIENT_GET_DELAY = (int)(BASE_DELAY * 5.2);     // Includes quorum read + response
-    public static final int CLIENT_UPDATE_DELAY = (int)(BASE_DELAY * 5.2);  // Includes read-before-write + quorum write
+    public static final int CLIENT_GET_DELAY = (int)(BASE_DELAY * 6.0);     // Includes quorum read + response
+    public static final int CLIENT_UPDATE_DELAY = (int)(BASE_DELAY * 7.0);  // Includes read-before-write + quorum write
     
     // Node lifecycle operation delays (complete operations)
     public static final int JOIN_DELAY = (int)(BASE_DELAY * 6.5);           // Complete join process with data transfer
