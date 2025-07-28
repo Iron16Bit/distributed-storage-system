@@ -1071,20 +1071,20 @@ public class InteractiveTest {
         }
         
         System.out.println("📝 Storing test data...");
-        node.tell(new Messages.ClientUpdate(100, "TestValue1"), client);
+        client.tell(new Messages.InitiateUpdate(100, "TestValue1", node), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         
-        node.tell(new Messages.ClientUpdate(101, "TestValue2"), client);
+        client.tell(new Messages.InitiateUpdate(101, "TestValue2", node), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         
         System.out.println("📖 Reading test data...");
-        node.tell(new Messages.ClientGet(100), client);
+        client.tell(new Messages.InitiateGet(100, node), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
         
-        node.tell(new Messages.ClientGet(101), client);
+        client.tell(new Messages.InitiateGet(101, node), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
         
-        node.tell(new Messages.ClientGet(999), client); // Non-existent key
+        client.tell(new Messages.InitiateGet(999, node), ActorRef.noSender()); // Non-existent key
         sleepForOperation(OperationType.CLIENT_GET);
         
         System.out.println("✅ Basic operations test completed");
@@ -1103,7 +1103,7 @@ public class InteractiveTest {
         ActorRef client = getRandomClient();
         
         System.out.println("📝 Storing data before failures...");
-        node.tell(new Messages.ClientUpdate(200, "QuorumTest"), client);
+        client.tell(new Messages.InitiateUpdate(200, "QuorumTest", node), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         
         // Crash some nodes
@@ -1128,11 +1128,11 @@ public class InteractiveTest {
         ActorRef activeNode = getRandomActiveNode();
         if (activeNode != null) {
             System.out.println("📖 Testing read with reduced quorum...");
-            activeNode.tell(new Messages.ClientGet(200), client);
+            client.tell(new Messages.InitiateGet(200, activeNode), ActorRef.noSender());
             sleepForOperation(OperationType.CLIENT_GET);
             
             System.out.println("✏️ Testing write with reduced quorum...");
-            activeNode.tell(new Messages.ClientUpdate(201, "QuorumTest2"), client);
+            client.tell(new Messages.InitiateUpdate(201, "QuorumTest2", activeNode), ActorRef.noSender());
             sleepForOperation(OperationType.CLIENT_UPDATE);
         }
         
@@ -1158,12 +1158,12 @@ public class InteractiveTest {
         }
         
         System.out.println("⚡ Concurrent writes to same key...");
-        node1.tell(new Messages.ClientUpdate(300, "ConcurrentValue1"), client1);
-        node2.tell(new Messages.ClientUpdate(300, "ConcurrentValue2"), client2);
+        client1.tell(new Messages.InitiateGet(300, node1), ActorRef.noSender());
+        client2.tell(new Messages.InitiateUpdate(300, "ConcurrentValue2", node2), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         
         System.out.println("📖 Reading after concurrent writes...");
-        node1.tell(new Messages.ClientGet(300), client1);
+        client1.tell(new Messages.InitiateGet(300, node1), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
         
         System.out.println("✅ Concurrency test completed");
@@ -1182,7 +1182,7 @@ public class InteractiveTest {
         }
         
         System.out.println("📝 Writing data via node " + getNodeId(writeNode) + "...");
-        writeNode.tell(new Messages.ClientUpdate(400, "ConsistencyTest"), client);
+        client.tell(new Messages.InitiateUpdate(400, "ConsistencyTest", writeNode), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         
         // Read from all active nodes
@@ -1190,7 +1190,7 @@ public class InteractiveTest {
         for (Map.Entry<Integer, ActorRef> entry : nodeRegistry.entrySet()) {
             if (!crashedNodes.contains(entry.getKey())) {
                 System.out.println("Reading from node " + entry.getKey() + "...");
-                entry.getValue().tell(new Messages.ClientGet(400), client);
+                client.tell(new Messages.InitiateGet(400, entry.getValue()), ActorRef.noSender());
                 sleepForOperation(OperationType.CLIENT_GET);
             }
         }
@@ -1212,10 +1212,10 @@ public class InteractiveTest {
         
         if (newNode != null) {
             System.out.println("📝 Testing operations with new node...");
-            newNode.tell(new Messages.ClientUpdate(500, "MembershipTest"), client);
+            client.tell(new Messages.InitiateUpdate(500, "MembershipTest", newNode), ActorRef.noSender());
             sleepForOperation(OperationType.CLIENT_UPDATE);
             
-            newNode.tell(new Messages.ClientGet(500), client);
+            client.tell(new Messages.InitiateGet(500, newNode), ActorRef.noSender());
             sleepForOperation(OperationType.CLIENT_GET);
         }
         
@@ -1257,10 +1257,10 @@ public class InteractiveTest {
         
         if (activeNode != null) {
             System.out.println("📝 Testing operations on remaining partition...");
-            activeNode.tell(new Messages.ClientUpdate(600, "PartitionTest"), client);
+            client.tell(new Messages.InitiateUpdate(600, "PartitionTest", activeNode), ActorRef.noSender());
             sleepForOperation(OperationType.CLIENT_UPDATE);
             
-            activeNode.tell(new Messages.ClientGet(600), client);
+            client.tell(new Messages.InitiateGet(600, activeNode), ActorRef.noSender());
             sleepForOperation(OperationType.CLIENT_GET);
         }
         
@@ -1295,10 +1295,10 @@ public class InteractiveTest {
                 ActorRef client = getRandomClient();
                 
                 System.out.println("📝 Testing operations after recovery...");
-                recoveredNode.tell(new Messages.ClientUpdate(700, "RecoveryTest"), client);
+                client.tell(new Messages.InitiateUpdate(700, "RecoveryTest", recoveredNode), ActorRef.noSender());
                 sleepForOperation(OperationType.CLIENT_UPDATE);
                 
-                recoveredNode.tell(new Messages.ClientGet(700), client);
+                client.tell(new Messages.InitiateGet(700, recoveredNode), ActorRef.noSender());
                 sleepForOperation(OperationType.CLIENT_GET);
             }
         }
@@ -1325,7 +1325,7 @@ public class InteractiveTest {
             ActorRef crashedNode = nodeRegistry.get(crashedNodeId);
             
             System.out.println("📝 Testing operation on crashed coordinator...");
-            crashedNode.tell(new Messages.ClientUpdate(800, "ErrorTest"), client);
+            client.tell(new Messages.InitiateUpdate(800, "ErrorTest", crashedNode), ActorRef.noSender());
             sleepForOperation(OperationType.CLIENT_UPDATE);
         }
         
@@ -1379,9 +1379,9 @@ public class InteractiveTest {
         
         for (int i = 0; i < numOperations; i++) {
             if (Math.random() > 0.3) { // 70% writes, 30% reads
-                node.tell(new Messages.ClientUpdate(1000 + i, "BenchmarkValue" + i), client);
+                client.tell(new Messages.InitiateUpdate(1000 + i, "BenchmarkValue" + i, node), ActorRef.noSender());
             } else {
-                node.tell(new Messages.ClientGet(1000 + (int)(Math.random() * i)), client);
+                client.tell(new Messages.InitiateGet(100 + (int)(Math.random() * i), node), ActorRef.noSender());
             }
             
             // Small delay to avoid overwhelming
@@ -1433,9 +1433,9 @@ public class InteractiveTest {
             int key = (int) (Math.random() * 1000) + 2000;
             
             if (Math.random() > 0.4) {
-                node.tell(new Messages.ClientUpdate(key, "StressValue" + operationCount), client);
+                client.tell(new Messages.InitiateUpdate(key, "StressValue" + operationCount, node), ActorRef.noSender());
             } else {
-                node.tell(new Messages.ClientGet(key), client);
+                client.tell(new Messages.InitiateGet(key, node), ActorRef.noSender());
             }
             
             operationCount++;

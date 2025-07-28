@@ -168,7 +168,7 @@ public class LargeScaleTest {
 
             logger.info("Initial data: Node {} storing key {} = {} (client-{})",
                     getNodeId(randomNode), key, value, (i + 1));
-            randomNode.tell(new Messages.ClientUpdate(key, value), uniqueClient);
+            uniqueClient.tell(new Messages.InitiateUpdate(key, value, randomNode), ActorRef.noSender());
 
             // Small delay between operations
             try {
@@ -243,11 +243,11 @@ public class LargeScaleTest {
                 String value = phase + "-Value" + i;
                 logger.info("{}: Node {} UPDATE key {} = {} (client-{})",
                         phase, getNodeId(randomNode), key, value, (i + 1));
-                randomNode.tell(new Messages.ClientUpdate(key, value), uniqueClient);
+                uniqueClient.tell(new Messages.InitiateUpdate(key, value, randomNode), ActorRef.noSender());
             } else {
                 logger.info("{}: Node {} GET key {} (client-{})",
                         phase, getNodeId(randomNode), key, (i + 1));
-                randomNode.tell(new Messages.ClientGet(key), uniqueClient);
+                uniqueClient.tell(new Messages.InitiateGet(key, randomNode), ActorRef.noSender());
             }
 
             // Small delay between operations to avoid overwhelming
@@ -283,11 +283,11 @@ public class LargeScaleTest {
                 String value = "ConcurrentValue" + i;
                 logger.info("Concurrent: Node {} UPDATE hot key {} = {} (client-{})",
                         getNodeId(randomNode), hotKey, value, (i + 1));
-                randomNode.tell(new Messages.ClientUpdate(hotKey, value), uniqueClient);
+                uniqueClient.tell(new Messages.InitiateUpdate(hotKey, value, randomNode), ActorRef.noSender());
             } else {
                 logger.info("Concurrent: Node {} GET hot key {} (client-{})",
                         getNodeId(randomNode), hotKey, (i + 1));
-                randomNode.tell(new Messages.ClientGet(hotKey), uniqueClient);
+                uniqueClient.tell(new Messages.InitiateGet(hotKey, randomNode), ActorRef.noSender());
             }
         }
 

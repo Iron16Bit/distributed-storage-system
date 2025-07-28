@@ -84,6 +84,18 @@ public class Messages {
 
     public static class Crash implements Serializable {}
 
+    public static class InitiateUpdate implements Serializable {
+        public final int key;
+        public final String value;
+        public final ActorRef coordinator;
+
+        public InitiateUpdate(int key, String value, ActorRef coordinator) {
+            this.key = key;
+            this.value = value;
+            this.coordinator = coordinator;
+        }
+    }
+
     public static class ClientUpdate implements Serializable {
         public final int key;
         public final String value;
@@ -131,6 +143,17 @@ public class Messages {
             this.versionedValue = versionedValue;
         }
     }
+
+    public static class InitiateGet implements Serializable {
+        public final int key;
+        public final ActorRef coordinator;
+
+        public InitiateGet(int key, ActorRef coordinator) {
+            this.key = key;
+            this.coordinator = coordinator;
+        }
+    }
+
 
     public static class ClientGet implements Serializable {
         public final int key;

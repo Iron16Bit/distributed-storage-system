@@ -94,34 +94,34 @@ public class Main {
         logger.info("========== TESTING BASIC CRUD OPERATIONS ==========");
 
         logger.info("=== Operation 1: Store key=1, value=Aluminum ===");
-        node1.tell(new Messages.ClientUpdate(1, "Aluminum"), client1);
+        client1.tell(new Messages.InitiateUpdate(1, "Aluminum", node1), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(nodeRegistry);
 
         logger.info("=== Operation 2: Store key=6, value=Gold ===");
-        node5.tell(new Messages.ClientUpdate(6, "Gold"), client1);
+        client1.tell(new Messages.InitiateUpdate(6, "Gold", node5), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(nodeRegistry);
 
         logger.info("=== Operation 3: Get key=1 ===");
-        node10.tell(new Messages.ClientGet(1), client1);
+        client1.tell(new Messages.InitiateGet(1, node10), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
 
         logger.info("=== Operation 4: Get key=6 ===");
-        node1.tell(new Messages.ClientGet(6), client1);
+        client1.tell(new Messages.InitiateGet(6, node1), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
 
         logger.info("=== Operation 5: Get key=200 (non-existent) ===");
-        node5.tell(new Messages.ClientGet(200), client1);
+        client1.tell(new Messages.InitiateGet(200, node5), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
 
-        logger.info("=== Operation 5.5: Update key=-1 (non-existent) ===");
-        node5.tell(new Messages.ClientGet(-1), client1);
+        logger.info("=== Operation 5.5: Get key=-1 (non-existent) ===");
+        client1.tell(new Messages.InitiateGet(-1, node5), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
 
 
         logger.info("=== Operation 5.75: Update key=-782 (non-existent) ===");
-        node1.tell(new Messages.ClientUpdate(-782, "ERROR"), client1);
+        client1.tell(new Messages.InitiateUpdate(-782, "ERROR", node1), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
 
 
@@ -133,21 +133,21 @@ public class Main {
         logger.info("========== TESTING MULTI-CLIENT OPERATIONS ==========");
 
         logger.info("=== Operation 6: Multiple clients storing different keys ===");
-        node1.tell(new Messages.ClientUpdate(2, "Silver"), client1);
-        node5.tell(new Messages.ClientUpdate(7, "Copper"), client2);
-        node10.tell(new Messages.ClientUpdate(3, "Iron"), client3);
+        client1.tell(new Messages.InitiateUpdate(2, "Silver", node1), ActorRef.noSender());
+        client2.tell(new Messages.InitiateUpdate(7, "Copper", node5), ActorRef.noSender());
+        client3.tell(new Messages.InitiateUpdate(3, "Iron", node10), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(nodeRegistry);
 
         logger.info("=== Operation 7: Multiple clients reading same key ===");
-        node1.tell(new Messages.ClientGet(1), client1);
-        node5.tell(new Messages.ClientGet(1), client2);
-        node10.tell(new Messages.ClientGet(1), client3);
+        client1.tell(new Messages.InitiateGet(1, node1), ActorRef.noSender());
+        client2.tell(new Messages.InitiateGet(1, node5), ActorRef.noSender());
+        client3.tell(new Messages.InitiateGet(1, node10), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
 
         logger.info("=== Operation 8: Concurrent updates to same key (deadlock -> timeout) ===");
-        node1.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-1"), client1);
-        node5.tell(new Messages.ClientUpdate(1, "Aluminum-Updated-2"), client2);
+        client1.tell(new Messages.InitiateUpdate(1, "Aluminum-Updated-1", node1), ActorRef.noSender());
+        client2.tell(new Messages.InitiateUpdate(1, "Aluminum-Updated-2", node5), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(nodeRegistry);
     }
@@ -161,11 +161,11 @@ public class Main {
         sleepForOperation(OperationType.CRASH);
 
         logger.info("=== Operation 10: Read with one node down ===");
-        node5.tell(new Messages.ClientGet(6), client1);
+        client1.tell(new Messages.InitiateGet(6, node5), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
 
         logger.info("=== Operation 11: Write with one node down ===");
-        node10.tell(new Messages.ClientUpdate(6, "Gold-Updated"), client1);
+        client1.tell(new Messages.InitiateUpdate(6, "Gold-Updated", node10), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(nodeRegistry);
 
@@ -186,10 +186,10 @@ public class Main {
         printNodeContents(nodeRegistry);
 
         logger.info("=== Operation 14: Operations with new topology ===");
-        node7.tell(new Messages.ClientUpdate(8, "Platinum"), client1);
+        client1.tell(new Messages.InitiateUpdate(8, "Platinum", node7), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
 
-        node7.tell(new Messages.ClientGet(1), client2);
+        client2.tell(new Messages.InitiateGet(1, node7), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
         printNodeContents(nodeRegistry);
 
@@ -220,24 +220,24 @@ public class Main {
         logger.info("========== TESTING CONCURRENCY AND RACE CONDITIONS ==========");
 
         logger.info("=== Operation 16: Concurrent read/write operations ===");
-        node1.tell(new Messages.ClientUpdate(25, "Titanium"), client1);
-        node5.tell(new Messages.ClientGet(25), client2);
-        node7.tell(new Messages.ClientUpdate(25, "Titanium-V2"), client3);
+        client1.tell(new Messages.InitiateUpdate(25, "Titanium", node1), ActorRef.noSender());
+        client2.tell(new Messages.InitiateGet(25, node5), ActorRef.noSender());
+        client3.tell(new Messages.InitiateUpdate(25, "Titanium-V2", node7), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
 
         logger.info("=== Operation 17: Read after concurrent writes ===");
-        node10.tell(new Messages.ClientGet(25), client3);
+        client3.tell(new Messages.InitiateGet(25, node10), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(nodeRegistry);
 
         logger.info("=== Operation 18: Sequential updates to test versioning ===");
-        node10.tell(new Messages.ClientUpdate(26, "V1"), client1);
+        client1.tell(new Messages.InitiateUpdate(26, "V1", node10), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
 
-        node7.tell(new Messages.ClientUpdate(26, "V2"), client2);
+        client2.tell(new Messages.InitiateUpdate(26, "V2", node7), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
 
-        node5.tell(new Messages.ClientUpdate(26, "V3"), client3);
+        client3.tell(new Messages.InitiateUpdate(26, "V3", node5), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(nodeRegistry);
     }
@@ -250,7 +250,7 @@ public class Main {
         node7.tell(new Messages.Crash(), nodeSystem);
         sleepForOperation(OperationType.CRASH);
 
-        node7.tell(new Messages.ClientGet(25), client1);
+        client1.tell(new Messages.InitiateGet(25, node7), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
 
         logger.info("=== Operation 20: Test timeout scenarios ===");
@@ -274,7 +274,7 @@ public class Main {
         node10.tell(new Messages.Crash(), nodeSystem);
         sleepForOperation(OperationType.CRASH);
 
-        node1.tell(new Messages.ClientGet(26), client1);
+        client1.tell(new Messages.InitiateGet(26, node1), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
         printNodeContents(nodeRegistry);
 
@@ -291,8 +291,8 @@ public class Main {
         printNodeContents(nodeRegistry);
 
         logger.info("=== Operation 24: Test data consistency after recovery ===");
-        node5.tell(new Messages.ClientGet(25), client1);
-        node10.tell(new Messages.ClientGet(26), client2);
+        client1.tell(new Messages.InitiateGet(25, node5), ActorRef.noSender());
+        client2.tell(new Messages.InitiateGet(26, node10), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
         printNodeContents(nodeRegistry);
     }
@@ -304,14 +304,14 @@ public class Main {
         logger.info("=== Operation 25: Random GET operation ===");
         ActorRef randomNode1 = getRandomNode();
         logger.info("Selected Node ID: {} for GET operation", getNodeId(randomNode1));
-        randomNode1.tell(new Messages.ClientGet(1), client1);
+        client1.tell(new Messages.InitiateGet(1, randomNode1), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_GET);
 
         // Operation 26: Random UPDATE operation
         logger.info("=== Operation 26: Random UPDATE operation ===");
         ActorRef randomNode2 = getRandomNode();
         logger.info("Selected Node ID: {} for UPDATE operation", getNodeId(randomNode2));
-        randomNode2.tell(new Messages.ClientUpdate(30, "RandomValue1"), client2);
+        client2.tell(new Messages.InitiateUpdate(30, "RandomValue1", randomNode2), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(nodeRegistry);
 
@@ -322,12 +322,12 @@ public class Main {
         logger.info("Node {} and Node {} performing operations on key 31",
                 getNodeId(randomNode3), getNodeId(randomNode4));
 
-        randomNode3.tell(new Messages.ClientUpdate(31, "ConcurrentValue1"), client1);
-        randomNode4.tell(new Messages.ClientUpdate(31, "SeMiScriviMiAmmazzo"), client3);
+        client1.tell(new Messages.InitiateUpdate(31, "ConcurrentValue1", randomNode3), ActorRef.noSender());
+        client3.tell(new Messages.InitiateUpdate(31, "SeMiScriviMiAmmazzo", randomNode4), ActorRef.noSender());
         sleepForOperation(OperationType.CLIENT_UPDATE);
 
         ActorRef[] clients = { client1, client2, client3 };
-        // Operation 28: Random UPDATEoperations on the same key
+        // Operation 28: Random UPDATE operations on the same key
         logger.info("=== Operation 28: Random UPDATE operations on the same key ===");
         for (int i = 0; i < 3; i++) {
             ActorRef randomNode = getRandomNode();
@@ -336,8 +336,7 @@ public class Main {
 
             logger.info("Random Node {} updating key {} with value {}",
                     getNodeId(randomNode), key, randomValue);
-            randomNode.tell(new Messages.ClientUpdate(key, randomValue),
-                    clients[i]);
+            clients[i].tell(new Messages.InitiateUpdate(key, randomValue, randomNode), ActorRef.noSender());
         }
         sleepForOperation(OperationType.CLIENT_UPDATE);
         printNodeContents(nodeRegistry);
@@ -349,7 +348,7 @@ public class Main {
             int key = 32;
 
             logger.info("Random Node {} reading key {}", getNodeId(randomNode), key);
-            randomNode.tell(new Messages.ClientGet(key), clients[i]);
+            clients[i].tell(new Messages.InitiateGet(key, randomNode), ActorRef.noSender());
         }
         sleepForOperation(OperationType.CLIENT_GET);
 
@@ -363,11 +362,11 @@ public class Main {
             if (Math.random() > 0.5) {
                 logger.info("Stress test: Node {} UPDATE key {} = {}",
                         getNodeId(randomNode), key, randomValue);
-                randomNode.tell(new Messages.ClientUpdate(key, randomValue), clients[i]);
+                clients[i].tell(new Messages.InitiateUpdate(key, randomValue, randomNode), ActorRef.noSender());
             } else {
                 logger.info("Stress test: Node {} GET key {}",
                         getNodeId(randomNode), key);
-                randomNode.tell(new Messages.ClientGet(key), clients[i]);
+                clients[i].tell(new Messages.InitiateGet(key, randomNode), ActorRef.noSender());
             }
         }
         sleepForOperation(OperationType.CLIENT_UPDATE);
