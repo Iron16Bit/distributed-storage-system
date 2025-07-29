@@ -286,4 +286,4 @@ This is an academic project for distributed systems coursework. The implementati
 
 ## 📄 License
 
-Academic project - refer to course guidelines for usage and distribution.
+Academic project - do whatever you please
