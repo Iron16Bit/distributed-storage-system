@@ -536,6 +536,7 @@ public class InteractiveTest {
         System.out.println("  test partition       - Test network partition scenarios");
         System.out.println("  test recovery        - Test crash recovery scenarios");
         System.out.println("  test edge-cases      - Test edge cases and error scenarios");
+        System.out.println("  test timeout         - Test client timeout scenarios");
         
         System.out.println("\n⚡ PERFORMANCE TESTING:");
         System.out.println("  benchmark <ops>      - Run performance benchmark");
@@ -552,6 +553,7 @@ public class InteractiveTest {
         System.out.println("  put 42 hello         - Store 'hello' at key 42 using random node/client");
         System.out.println("  crash 20             - Crash node 20");
         System.out.println("  test basic           - Run basic functionality test");
+        System.out.println("  test timeout         - Test client timeout behavior");
         System.out.println("=".repeat(60) + "\n");
     }
 
@@ -1038,7 +1040,7 @@ public class InteractiveTest {
         
         if (parts.length < 2) {
             System.out.println("Usage: test <scenario>");
-            System.out.println("Available scenarios: basic, quorum, concurrency, consistency, membership, partition, recovery, edge-cases");
+            System.out.println("Available scenarios: basic, quorum, concurrency, consistency, membership, partition, recovery, edge-cases, timeout");
             return;
         }
         
@@ -1054,6 +1056,7 @@ public class InteractiveTest {
             case "partition" -> testPartition();
             case "recovery" -> testRecovery();
             case "edge-cases" -> testEdgeCases();
+            case "timeout" -> testClientTimeout();
             default -> System.out.println("❌ Unknown test scenario: " + scenario);
         }
     }
@@ -1348,6 +1351,112 @@ public class InteractiveTest {
         }
         
         System.out.println("✅ Edge cases test completed");
+    }
+
+    private static void testClientTimeout() {
+        System.out.println("🔧 Testing client timeout scenarios...");
+        
+        ActorRef client = getRandomClient();
+        if (client == null) {
+            System.out.println("❌ No clients available");
+            return;
+        }
+        
+        // Test 1: Client timeout when coordinator node is crashed
+        System.out.println("📝 Test 1: Testing client timeout with crashed coordinator...");
+        
+        // Select a node to crash that will serve as coordinator
+        ActorRef coordinatorNode = getRandomActiveNode();
+        if (coordinatorNode == null) {
+            System.out.println("❌ No active nodes available for coordinator test");
+            return;
+        }
+        
+        int coordinatorNodeId = getNodeId(coordinatorNode);
+        System.out.println("💥 Crashing coordinator node " + coordinatorNodeId + "...");
+        coordinatorNode.tell(new Messages.Crash(), ActorRef.noSender());
+        crashedNodes.add(coordinatorNodeId);
+        sleepForOperation(OperationType.CRASH);
+        
+        System.out.println("⏰ Client sending write request to crashed coordinator (should timeout)...");
+        client.tell(new Messages.InitiateUpdate(1001, "TimeoutTestValue", coordinatorNode), ActorRef.noSender());
+        
+        // Wait longer than typical operation to observe timeout
+        try {
+            Thread.sleep(5000); // Wait 5 seconds to observe timeout
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        
+        System.out.println("✅ Write timeout test completed (client should have timed out)");
+        
+        // Test 2: Client timeout with read request to crashed coordinator
+        System.out.println("\n📖 Test 2: Testing read timeout with crashed coordinator...");
+        
+        System.out.println("⏰ Client sending read request to crashed coordinator (should timeout)...");
+        client.tell(new Messages.InitiateGet(1001, coordinatorNode), ActorRef.noSender());
+        
+        // Wait longer than typical operation to observe timeout
+        try {
+            Thread.sleep(5000); // Wait 5 seconds to observe timeout
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        
+        System.out.println("✅ Read timeout test completed (client should have timed out)");
+        
+        // Test 3: Multiple consecutive timeouts
+        System.out.println("\n🔄 Test 3: Testing multiple consecutive timeouts...");
+        
+        // Crash another node if available
+        ActorRef anotherNode = getRandomActiveNode();
+        if (anotherNode != null) {
+            int anotherNodeId = getNodeId(anotherNode);
+            System.out.println("💥 Crashing another node " + anotherNodeId + " for multiple timeout test...");
+            anotherNode.tell(new Messages.Crash(), ActorRef.noSender());
+            crashedNodes.add(anotherNodeId);
+            sleepForOperation(OperationType.CRASH);
+            
+            System.out.println("⏰ Sending multiple requests to crashed nodes...");
+            
+            // Send multiple requests that should all timeout
+            client.tell(new Messages.InitiateUpdate(1002, "TimeoutTest2", coordinatorNode), ActorRef.noSender());
+            client.tell(new Messages.InitiateUpdate(1003, "TimeoutTest3", anotherNode), ActorRef.noSender());
+            client.tell(new Messages.InitiateGet(1002, coordinatorNode), ActorRef.noSender());
+            client.tell(new Messages.InitiateGet(1003, anotherNode), ActorRef.noSender());
+            
+            try {
+                Thread.sleep(6000); // Wait longer to observe multiple timeouts
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            
+            System.out.println("✅ Multiple timeout test completed");
+        } else {
+            System.out.println("⚠️  Skipping multiple timeout test - no additional active nodes available");
+        }
+        
+        // Test 4: Compare with successful operation on active node
+        ActorRef activeNode = getRandomActiveNode();
+        if (activeNode != null) {
+            System.out.println("\n✅ Test 4: Verifying normal operation with active coordinator...");
+            System.out.println("� Sending request to active node " + getNodeId(activeNode) + " (should succeed)...");
+            
+            client.tell(new Messages.InitiateUpdate(1004, "SuccessfulOperation", activeNode), ActorRef.noSender());
+            sleepForOperation(OperationType.CLIENT_UPDATE);
+            
+            client.tell(new Messages.InitiateGet(1004, activeNode), ActorRef.noSender());
+            sleepForOperation(OperationType.CLIENT_GET);
+            
+            System.out.println("✅ Normal operation test completed (should have succeeded)");
+        } else {
+            System.out.println("⚠️  No active nodes available for comparison test");
+        }
+        
+        System.out.println("\n✅ Client timeout test scenario completed");
+        System.out.println("💡 The client should have experienced timeouts when sending requests to crashed coordinators");
+        System.out.println("💡 Check the client logs for timeout messages and behavior");
+        System.out.println("💡 Use 'reset' command to restore system to initial state");
     }
 
     private static void handleBenchmark(String[] parts) {
