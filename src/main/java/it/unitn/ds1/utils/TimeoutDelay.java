@@ -43,5 +43,4 @@ public class TimeoutDelay {
             case INIT -> BASE_DELAY;
         };
     }
-
 }

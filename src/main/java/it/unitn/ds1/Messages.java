@@ -8,8 +8,14 @@ import akka.actor.ActorRef;
 import it.unitn.ds1.types.OperationType;
 import it.unitn.ds1.utils.VersionedValue;
 
+
+/*
+ * This file contains all of the messages that we are using inside the distributed storage system
+ */
+
 public class Messages {
 
+    // Base delay for each message
     public static final int DELAY = 450;
 
     // Debug message to print the contents of a node's data store
@@ -96,6 +102,7 @@ public class Messages {
         }
     }
 
+    // Message sent by the Client to the Coordinator
     public static class ClientUpdate implements Serializable {
         public final int key;
         public final String value;
@@ -107,6 +114,7 @@ public class Messages {
 
     }
 
+    // Message sent by the Coordinator to the needed Replicas
     public static class ReplicaUpdate implements Serializable {
         public final int key;
         public final String value;
@@ -218,7 +226,6 @@ public class Messages {
     }
 
 
-    // Add this to your Messages class
     public static class UpdateNodeRegistry implements Serializable {
         public final SortedMap<Integer, ActorRef> nodeRegistry;
         public final OperationType operationType;

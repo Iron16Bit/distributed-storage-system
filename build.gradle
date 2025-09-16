@@ -1,6 +1,8 @@
 apply plugin: 'java'
 apply plugin: 'application'
 
+group = 'it.unitn.ds1'
+version = '1.0.0'
 
 repositories {
     mavenCentral()
@@ -14,7 +16,7 @@ def versions = [
 dependencies {
     implementation 'org.slf4j:slf4j-api:1.7.36'
     implementation 'ch.qos.logback:logback-classic:1.2.12'
-    implementation platform("com.typesafe.akka:akka-bom_${versions.ScalaBinary}:2.6.13")
+    implementation platform("com.typesafe.akka:akka-bom_${versions.ScalaBinary}:2.6.20")
     implementation "com.typesafe.akka:akka-actor_${versions.ScalaBinary}"
     testImplementation "com.typesafe.akka:akka-testkit_${versions.ScalaBinary}"
 }
@@ -22,9 +24,12 @@ dependencies {
 compileJava {
     options.compilerArgs += ["-Xlint:deprecation"]
 }
-// mainClassName = "it.unitn.ds1.test.LargeScaleTest"
-mainClassName = "it.unitn.ds1.test.InteractiveTest"
-// mainClassName = "it.unitn.ds1.Main"
+
+application {
+    mainClass = "it.unitn.ds1.test.InteractiveTest"
+    // mainClass = "it.unitn.ds1.test.LargeScaleTest"
+    // mainClass = "it.unitn.ds1.Main"
+}
 
 run {
     standardInput = System.in

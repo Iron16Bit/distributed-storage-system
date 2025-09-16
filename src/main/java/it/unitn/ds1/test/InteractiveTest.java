@@ -20,11 +20,9 @@ import it.unitn.ds1.actors.Client;
 import it.unitn.ds1.actors.StorageNode;
 import it.unitn.ds1.types.OperationType;
 import it.unitn.ds1.utils.OperationDelays;
-import it.unitn.ds1.utils.FzfIntegration;
 
 /**
  * Interactive command-line testing tool for the distributed storage system.
- * Enhanced with fzf integration for better command discovery.
  */
 public class InteractiveTest {
     
@@ -132,7 +130,6 @@ public class InteractiveTest {
         switch (command) {
             case "--help", "-h" -> displayCommandLineHelp();
             case "--list-commands" -> listAllCommands();
-            case "--fzf-test" -> testFzfIntegration();
             default -> {
                 System.out.println("Unknown option: " + command);
                 displayCommandLineHelp();
@@ -168,29 +165,9 @@ public class InteractiveTest {
         }
     }
 
-    private static void testFzfIntegration() {
-        System.out.println("Testing fzf integration...");
-        System.out.println("fzf available: " + FzfIntegration.isFzfAvailable());
-        
-        List<String> testOptions = new ArrayList<>();
-        for (CommandInfo cmd : COMMANDS.values()) {
-            testOptions.add(cmd.toString());
-        }
-        
-        String selection = FzfIntegration.selectWithFzf(testOptions, "Select a command");
-        if (selection != null) {
-            System.out.println("You selected: " + selection);
-        } else {
-            System.out.println("No selection made");
-        }
-    }
-
     private static void displayWelcomeMessage() {
         System.out.println("\n" + "=".repeat(80));
         System.out.println("    INTERACTIVE DISTRIBUTED STORAGE SYSTEM TEST");
-        if (FzfIntegration.isFzfAvailable()) {
-            System.out.println("                  🔍 fzf integration enabled");
-        }
         System.out.println("=".repeat(80));
         System.out.println("Current system state:");
         System.out.println("- Active nodes: " + (nodeRegistry.size() - crashedNodes.size()));
@@ -198,7 +175,7 @@ public class InteractiveTest {
         System.out.println("- Clients: " + clients.size());
         System.out.println("- Next node ID: " + nextNodeId);
         System.out.println("- Replication factor (N): " + dataStoreManager.N + " (W=" + dataStoreManager.W + ", R=" + dataStoreManager.R + ")");
-        System.out.println("\nCommands: Type 'help', '?' (fzf), 'search <term>', or 'quit'");
+        System.out.println("\nCommands: Type 'help', 'search <term>', or 'quit'");
         System.out.println("=".repeat(80) + "\n");
     }
 
@@ -218,12 +195,6 @@ public class InteractiveTest {
                 String input = scanner.nextLine().trim();
                 
                 if (input.isEmpty()) continue;
-                
-                // Check for fzf command search
-                if (input.equals("?")) {
-                    handleFzfCommandSearch();
-                    continue;
-                }
                 
                 // Check for fuzzy search
                 if (input.startsWith("search")) {
@@ -298,96 +269,6 @@ public class InteractiveTest {
         }
         
         scanner.close();
-    }
-
-    private void handleFzfCommandSearch() {
-        List<String> commandOptions = new ArrayList<>();
-        
-        // Group commands by category for better display
-        Map<String, List<CommandInfo>> categorized = COMMANDS.values().stream()
-            .collect(Collectors.groupingBy(cmd -> cmd.category));
-        
-        for (Map.Entry<String, List<CommandInfo>> entry : categorized.entrySet()) {
-            commandOptions.add("── " + entry.getKey() + " ──");
-            for (CommandInfo cmd : entry.getValue()) {
-                commandOptions.add(cmd.toString());
-            }
-            commandOptions.add(""); // Empty line for separation
-        }
-        
-        String selection = FzfIntegration.selectWithFzf(commandOptions, "Select command");
-        
-        if (selection != null && !selection.startsWith("──") && !selection.isEmpty()) {
-            // Extract command name from selection
-            String commandName = selection.split(" ")[0];
-            if (COMMANDS.containsKey(commandName)) {
-                System.out.println("Selected: " + commandName);
-                System.out.print("Enter parameters (or press Enter for no parameters): ");
-                
-                try (// Use the main scanner instead of creating a new one
-                Scanner scanner = new Scanner(System.in)) {
-                    try {
-                        if (scanner.hasNextLine()) {
-                            String params = scanner.nextLine().trim();
-                            
-                            String fullCommand = params.isEmpty() ? commandName : commandName + " " + params;
-                            System.out.println("Executing: " + fullCommand);
-                            
-                            // Execute the command by simulating input
-                            executeCommand(fullCommand);
-                        }
-                    } catch (NoSuchElementException e) {
-                        System.out.println("Input not available, skipping parameter input.");
-                    }
-                    // Don't close this scanner as it's used by the main loop
-                }
-            }
-        }
-    }
-
-    private void executeCommand(String fullCommand) {
-        String[] parts = fullCommand.split("\\s+");
-        String command = parts[0].toLowerCase();
-        
-        try {
-            switch (command) {
-                case "help", "h" -> displayHelp();
-                case "status", "s" -> displayStatus();
-                case "nodes" -> displayNodes();
-                case "clients" -> displayClients();
-                case "data" -> displayData();
-                
-                // Basic Operations
-                case "get" -> handleGet(parts);
-                case "put", "update" -> handleUpdate(parts);
-                
-                // Node Management
-                case "addnode" -> handleAddNode(parts);
-                case "removenode" -> handleRemoveNode(parts);
-                case "crash" -> handleCrash(parts);
-                case "recover" -> handleRecover(parts);
-                case "join" -> handleJoin(parts);
-                case "leave" -> handleLeave(parts);
-                
-                // Client Management
-                case "addclient" -> handleAddClient();
-                case "removeclient" -> handleRemoveClient(parts);
-                
-                // Testing Scenarios
-                case "test" -> handleTestScenario(parts);
-                case "benchmark" -> handleBenchmark(parts);
-                case "stress" -> handleStressTest(parts);
-                
-                // System Control
-                case "clear" -> clearScreen();
-                case "reset" -> handleReset();
-                
-                default -> System.out.println("Command not recognized: " + command);
-            }
-        } catch (Exception e) {
-            System.err.println("Error executing command: " + e.getMessage());
-            logger.error("Command execution error", e);
-        }
     }
 
     private static void handleFuzzySearch(String input, Scanner scanner) {
@@ -498,11 +379,11 @@ public class InteractiveTest {
         System.out.println("AVAILABLE COMMANDS");
         System.out.println("=".repeat(60));
         
-        if (FzfIntegration.isFzfAvailable()) {
-            System.out.println("\n🔍 ENHANCED FEATURES:");
-            System.out.println("  ?                    - Interactive command search with fzf");
-            System.out.println("  search <term>        - Fuzzy search commands");
-        }
+        // if (FzfIntegration.isFzfAvailable()) {
+        //     System.out.println("\n🔍 ENHANCED FEATURES:");
+        //     System.out.println("  ?                    - Interactive command search with fzf");
+        //     System.out.println("  search <term>        - Fuzzy search commands");
+        // }
         
         System.out.println("\n📊 SYSTEM INFORMATION:");
         System.out.println("  help, h              - Show this help message");
@@ -870,6 +751,11 @@ public class InteractiveTest {
             
             if (crashedNodes.contains(nodeId)) {
                 System.out.println("❌ Node " + nodeId + " is already crashed");
+                return;
+            }
+
+            if (nodeRegistry.size() - 1 == 0) {
+                System.out.println("❌ At least one node neads to be active!");
                 return;
             }
             

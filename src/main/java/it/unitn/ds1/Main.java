@@ -16,6 +16,11 @@ import it.unitn.ds1.actors.StorageNode;
 import it.unitn.ds1.types.OperationType;
 import it.unitn.ds1.utils.OperationDelays;
 
+
+/*
+ * Used to run standard canonic benchmark that we leveraged to develop the project
+ */
+
 public class Main {
 
     private static final Logger logger = LoggerFactory.getLogger(Main.class);

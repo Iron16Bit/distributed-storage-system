@@ -58,6 +58,10 @@ public class StorageNode extends AbstractActor {
     
     // ===== NESTED CLASSES =====
     
+    /**
+     * Tracks ongoing GET operations at the coordinator level.
+     * Collects responses from R replicas before completing the operation.
+     */
     private static class GetOperation {
         final int key;
         final ActorRef client;
@@ -82,6 +86,10 @@ public class StorageNode extends AbstractActor {
         }
     }
 
+    /**
+     * Tracks ongoing UPDATE operations at the coordinator level.
+     * Manages the two-phase update process: read-then-write with W replicas.
+     */
     private static class UpdateOperation {
         final int key;
         final ActorRef client;
@@ -164,7 +172,7 @@ public class StorageNode extends AbstractActor {
     }
 
     // ===== UTILITY METHODS =====
-    
+
     private void scheduleMessage(ActorRef receiver, ActorRef sender, Object msg) {
         int randomDelay = 50 + random.nextInt(Messages.DELAY);
         getContext().system().scheduler().scheduleOnce(
@@ -174,6 +182,7 @@ public class StorageNode extends AbstractActor {
         );
     }
 
+
     private void scheduleTimeoutMessage(ActorRef ref, Messages.Timeout msg) {
         getContext().system().scheduler().scheduleOnce(
             Duration.create(TimeoutDelay.getDelayForOperation(msg.operationType), TimeUnit.MILLISECONDS),
@@ -182,8 +191,20 @@ public class StorageNode extends AbstractActor {
         );
     }
 
-    // ===== CONSISTENT HASHING =====
+    // ===== LOCATE N REPLICAS =====
     
+    /**
+     * Implements consistent hashing to determine which N nodes should store a key.
+     * 
+     * Algorithm:
+     * 1. Find the first node with ID >= key (wrap around if necessary)
+     * 2. Select N consecutive nodes starting from that position
+     * 3. Handle edge cases: single node, empty registry, negative keys
+     * 
+     * @param key The data key to hash
+     * @param nodeRegistry Current view of the cluster
+     * @return List of N nodes responsible for this key (may be < N if insufficient nodes)
+     */
     private List<ActorRef> getNextNNodes(int key, SortedMap<Integer, ActorRef> nodeRegistry) {
         List<ActorRef> result = new ArrayList<>();
         
@@ -208,7 +229,6 @@ public class StorageNode extends AbstractActor {
         }
 
         // Add N nodes starting from startIndex (with wrap-around)
-        // logger.info("DataStoreManager: {}", this.dataStoreManager);
         for (int i = 0; i < this.dataStoreManager.N && i < nodeIds.size(); i++) {
             int index = (startIndex + i) % nodeIds.size();
             Integer nodeId = nodeIds.get(index);
@@ -221,7 +241,21 @@ public class StorageNode extends AbstractActor {
     // ===== LOCKING MECHANISMS =====
     
     /**
-     * Check if a key is locked at the coordinator level
+     * Two-level locking system for consistency:
+     * 
+     * COORDINATOR LEVEL: Prevents conflicting operations on the same key
+     * - UPDATE blocks all other operations (exclusive)
+     * - GET is blocked by ongoing UPDATEs
+     * 
+     * REPLICA LEVEL: Controls concurrent access at individual replicas
+     * - Multiple concurrent GETs allowed (shared read)
+     * - UPDATE requires exclusive access
+     * - Prevents read-write and write-write conflicts
+     */
+
+    /**
+     * Check if a key is locked at the coordinator level.
+     * Uses operation ID pattern matching to detect conflicts.
      */
     private boolean isLocked(int key, OperationType operationType) {
         String pattern = "-" + key + "-";
@@ -235,25 +269,28 @@ public class StorageNode extends AbstractActor {
                     pendingGet.keySet().stream()
                     .anyMatch(operationId -> operationId.contains(pattern));
             default -> {
-                logger.error("Node {} - checking for lock with wrong type", this.id);
+                logger.error("Node {} - checking for lock with unknown type!", this.id);
                 yield false;
             }
         };
     }
     
     /**
-     * Acquire a lock at the replica level
+     * Acquire a lock at the replica level.
+     * Implements reader-writer semantics: multiple readers OR single writer.
      */
     private boolean acquireLock(int key, OperationType operationType, String operationId) {
         Set<String> locks = keylocks.computeIfAbsent(key, k -> new HashSet<>());
         OperationType currentLockType = keyLockTypes.get(key);
 
+        // No lock present at replica level => allow
         if (locks.isEmpty()) {
             locks.add(operationId);
             keyLockTypes.put(key, operationType);
             return true;
         }
 
+        // Current lock is for a GET AND aksing lock is also a GET => allow
         if (currentLockType == OperationType.CLIENT_GET && operationType == OperationType.CLIENT_GET) {
             locks.add(operationId);
             return true;
@@ -304,6 +341,16 @@ public class StorageNode extends AbstractActor {
         scheduleTimeoutMessage(getSelf(), new Messages.Timeout(null, OperationType.JOIN, -1));
     }
 
+    /**
+     * Handles graceful node departure with data redistribution.
+     * 
+     * Process:
+     * 1. Calculate future topology without this node
+     * 2. Verify replication factor constraints
+     * 3. Wait for ACKs from nodes that will inherit data
+     * 4. Redistribute data to remaining nodes
+     * 5. Remove self from cluster
+     */
     private void onLeave(Messages.Leave msg) {
         logger.info("Node {} - Initiating LEAVE operation", this.id);
         
@@ -332,7 +379,7 @@ public class StorageNode extends AbstractActor {
             this.nodeRegistry.clear();
             getContext().become(initialSpawn());
             logger.info("Node {} - Successfully left the cluster", this.id);
-            // Here the program should exit!
+            return;
         } else {
             for (ActorRef ref : neededAcks) {
                 scheduleMessage(ref, getSelf(), new Messages.NotifyLeave());
@@ -403,12 +450,20 @@ public class StorageNode extends AbstractActor {
         logger.info("Node {} - Registry updated: now tracking {} nodes", this.id, this.nodeRegistry.size());
     }
 
+    /**
+     * Handles registry initialization during system startup.
+     * Adds this node to the registry and transitions to active state.
+     */
     private void handleInitUpdate() {
         this.nodeRegistry.put(this.id, getSelf());
         logger.info("Node {} - Node registry initialized with {} nodes", this.id, this.nodeRegistry.size());
         getContext().become(createReceive());
     }
 
+    /**
+     * Handles registry update during node recovery after crash.
+     * Requests missing data from neighbors and cleans up obsolete entries.
+     */
     private void handleRecoveryUpdate() {
         ActorRef neighbor = findNeighborForRecovery();
         if (neighbor != null) {
@@ -426,6 +481,10 @@ public class StorageNode extends AbstractActor {
         }
     }
 
+    /**
+     * Finds the predecessor node in the ring for recovery purposes.
+     * Uses the node with highest ID less than this node's ID.
+     */
     private ActorRef findNeighborForRecovery() {
         SortedMap<Integer, ActorRef> lowerNodes = this.nodeRegistry.headMap(this.id);
         return lowerNodes.isEmpty() 
@@ -433,6 +492,10 @@ public class StorageNode extends AbstractActor {
             : lowerNodes.lastEntry().getValue();
     }
 
+    /**
+     * Finds the successor node in the ring for join operations.
+     * Uses the node with lowest ID greater than this node's ID.
+     */
     private ActorRef findNeighborForJoin() {
         SortedMap<Integer, ActorRef> higherNodes = this.nodeRegistry.tailMap(this.id);
         return higherNodes.isEmpty()
@@ -440,6 +503,10 @@ public class StorageNode extends AbstractActor {
             : higherNodes.firstEntry().getValue();
     }
 
+    /**
+     * Removes data items that this node should no longer store after topology changes.
+     * Called during recovery to ensure consistent data placement.
+     */
     private void cleanupObsoleteData() {
         int droppedItems = 0;
         var iterator = this.dataStore.entrySet().iterator();
@@ -473,6 +540,10 @@ public class StorageNode extends AbstractActor {
         }
     }
 
+    /**
+     * Removes data items that should no longer be stored after a new node joins.
+     * Ensures proper data redistribution according to the N replicas rule.
+     */
     private int cleanupDataAfterJoin() {
         Map<Integer, VersionedValue> itemsToCheck = new TreeMap<>(this.dataStore);
         int itemsDropped = 0;
@@ -527,6 +598,10 @@ public class StorageNode extends AbstractActor {
         }
     }
 
+    /**
+     * Processes data item received during join operation.
+     * Initiates GET requests to collect all replicas for proper version resolution.
+     */
     private void handleJoinDataItem(Integer key, SortedMap<Integer, ActorRef> futureMap) {
         if (!getNextNNodes(key, futureMap).contains(getSelf())) {
             return;
@@ -582,6 +657,14 @@ public class StorageNode extends AbstractActor {
 
     // ===== MESSAGE HANDLERS - CLIENT OPERATIONS =====
     
+    /**
+     * Handles client UPDATE requests using two-phase protocol:
+     * 
+     * Phase 1: Read current values from W replicas to determine latest version
+     * Phase 2: Write new value with incremented version to W replicas
+     * 
+     * This ensures strong consistency and prevents lost updates.
+     */
     private void onClientUpdate(Messages.ClientUpdate msg) {
         logger.info("Node {} - UPDATE request: key={}, value={}", this.id, msg.key, msg.value);
 
@@ -606,6 +689,12 @@ public class StorageNode extends AbstractActor {
         startReadBeforeUpdate(msg, operationId, nodeList);
     }
 
+    /**
+     * Handles client GET requests with R-quorum reads.
+     * 
+     * Reads from R replicas and returns the value with highest version number.
+     * This provides read-your-writes consistency when R + W > N.
+     */
     private void onClientGet(Messages.ClientGet msg) {
         logger.info("Node {} - GET request: key={}", this.id, msg.key);
         
@@ -633,10 +722,18 @@ public class StorageNode extends AbstractActor {
         startGetOperation(msg, operationId, nodeList);
     }
 
+    /**
+     * Creates a unique operation identifier for tracking distributed operations.
+     * Format: nodeId-key-counter ensures uniqueness across the cluster.
+     */
     private String generateOperationId(int key) {
         return this.id + "-" + key + "-" + (++operationCounter);
     }
 
+    /**
+     * Checks if an operation should be blocked due to coordinator-level locks.
+     * Sends error response and returns true if operation cannot proceed.
+     */
     private boolean isOperationBlocked(int key, OperationType operationType, String operationId) {
         if (isLocked(key, operationType)) {
             logger.warn("Node {} - {} rejected: key {} is locked at coordinator level", 
@@ -647,6 +744,10 @@ public class StorageNode extends AbstractActor {
         return false;
     }
 
+    /**
+     * Attempts to acquire replica-level lock for this node if it's a replica.
+     * Returns false and sends error if lock acquisition fails.
+     */
     private boolean tryAcquireReplicaLock(int key, OperationType operationType, String operationId, List<ActorRef> nodeList) {
         if (nodeList.contains(getSelf()) && !acquireLock(key, operationType, operationId)) {
             logger.warn("Node {} - {} rejected: key {} is locked at replica level", this.id, operationType, key);
@@ -656,7 +757,10 @@ public class StorageNode extends AbstractActor {
         }
         return true;
     }
-
+    /**
+     * Initiates the read phase of a two-phase update operation.
+     * Collects current values from W replicas before proceeding to write phase.
+     */
     private void startReadBeforeUpdate(Messages.ClientUpdate msg, String operationId, List<ActorRef> nodeList) {
         GetOperation getOperation = new GetOperation(msg.key, sender(), msg.value);
         pendingGet.put(operationId, getOperation);
@@ -680,7 +784,6 @@ public class StorageNode extends AbstractActor {
         try {
             Thread.sleep(Messages.DELAY);
         } catch (InterruptedException e) {
-            // TODO Auto-generated catch block
             logger.error("Node {} - could not execute delay after update!", this.id);
             e.printStackTrace();
         }
@@ -689,6 +792,10 @@ public class StorageNode extends AbstractActor {
         checkGetOperation(operationId);
     }
 
+    /**
+     * Initiates a GET operation by sending requests to all replicas.
+     * Waits for R responses before returning the latest value to client.
+     */
     private void startGetOperation(Messages.ClientGet msg, String operationId, List<ActorRef> nodeList) {
         GetOperation operation = new GetOperation(msg.key, sender(), OperationType.CLIENT_GET);
         pendingGet.put(operationId, operation);
@@ -750,6 +857,13 @@ public class StorageNode extends AbstractActor {
     
     // ===== OPERATION COMPLETION LOGIC =====
     
+    /**
+     * Determines when a GET operation has collected enough responses.
+     * 
+     * For CLIENT_GET: Wait for R responses, then return latest value
+     * For UPDATE: Wait for W responses, then proceed to write phase
+     * For JOIN: Wait for N responses to get complete view of data
+     */
     private void checkGetOperation(String operationId) {
         GetOperation operation = pendingGet.get(operationId);
         if (operation == null) return;
@@ -811,6 +925,10 @@ public class StorageNode extends AbstractActor {
         }
     }
 
+    /**
+     * Finds the value with the highest version number from collected responses.
+     * This implements "last writer wins" semantics for conflict resolution.
+     */
     private VersionedValue findLatestValue(List<VersionedValue> values) {
         VersionedValue latest = null;
         for (VersionedValue value : values) {
@@ -847,6 +965,12 @@ public class StorageNode extends AbstractActor {
 
     // ===== MESSAGE HANDLERS - ERROR HANDLING =====
     
+    /**
+     * Comprehensive timeout handling for different operation types.
+     * 
+     * Timeouts ensure system liveness when nodes fail or network partitions occur.
+     * Each operation type has specific cleanup requirements to maintain consistency.
+     */
     private void onTimeout(Messages.Timeout msg) {
         switch (msg.operationType) {
             case CLIENT_GET -> handleGetTimeout(msg);
@@ -865,8 +989,15 @@ public class StorageNode extends AbstractActor {
         }
     }
 
+    /**
+     * Handles UPDATE operation timeouts with careful lock cleanup.
+     * 
+     * Coordinator timeouts: Clean up operation state and notify replicas
+     * Replica timeouts: Release locks to prevent deadlock
+     */
     private void handleUpdateTimeout(Messages.Timeout msg) {
         if (pendingGet.containsKey(msg.operationId) && pendingUpdate.containsKey(msg.operationId)) {
+            // This is a coordinator timeout - clean up and notify replicas
             UpdateOperation updateOperation = pendingUpdate.remove(msg.operationId);
             pendingGet.remove(msg.operationId);
             
@@ -883,6 +1014,7 @@ public class StorageNode extends AbstractActor {
             scheduleMessage(updateOperation.client, getSelf(), new Messages.Error(msg.key, msg.operationId, OperationType.CLIENT_UPDATE));
             
         } else if (releaseLock(msg.key, msg.operationId)) {
+            // This is a replica timeout - just release the lock
             logger.debug("Node {} (Replica) - Timeout on UPDATE operation for key {} - releasing lock", this.id, msg.key);
         }
     }

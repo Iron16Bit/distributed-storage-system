@@ -91,9 +91,6 @@ public class Client extends AbstractActor {
             logger.error("Client Operation {}, Id {}, timed out after {}ms due to coordinator unresponsiveness", 
                         msg.operationType, msg.operationId, 
                         System.currentTimeMillis() - operation.timestamp);
-            
-            // Optional: Implement retry logic here
-            // handleOperationTimeout(operation, msg.operationId);
         } else {
             logger.debug("Client timeout evaded, Operation {} - Id {} already completed", 
                         msg.operationType, msg.operationId);
@@ -122,14 +119,9 @@ public class Client extends AbstractActor {
         }
     }
 
-    private void handleOperationTimeout(PendingOperation operation, String operationId) {
-        // Optional: Implement retry logic or other timeout handling
-        logger.warn("Operation timeout for key {} - consider retry or coordinator failover", operation.key);
-    }
-
     private void scheduleTimeout(String operationId, OperationType operationType, int key) {
         getContext().system().scheduler().scheduleOnce(
-            Duration.create(TimeoutDelay.getDelayForOperation(operationType) + 500, TimeUnit.MILLISECONDS),
+            Duration.create(TimeoutDelay.getDelayForOperation(operationType) + 1000, TimeUnit.MILLISECONDS),
             getSelf(),
             new Messages.Timeout(operationId, operationType, key),
             getContext().system().dispatcher(), 
