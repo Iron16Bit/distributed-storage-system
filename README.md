@@ -1,10 +1,10 @@
 # Distributed Storage System
 
-A fault-tolerant, peer-to-peer key-value storage system implementation using the Actor model with Akka. This system provides distributed data storage with configurable replication, consistency guarantees, and failure handling capabilities.
+A p2p key-value storage system implementation using the Actor model with Akka. This system provides distributed data storage with configurable replication, consistency guarantees, and failure handling capabilities.
 
 ## 🏗️ System Architecture
 
-The system implements a distributed hash table (DHT) with the following key features:
+The system implements a distributed storage system with the following key features:
 
 - **Actor-based Architecture**: Built using Akka actors for concurrent and distributed processing
 - **Configurable Replication**: Supports N/W/R parameters for tunable consistency and availability
@@ -27,8 +27,7 @@ src/main/java/it/unitn/ds1/
 ├── utils/
 │   ├── VersionedValue.java   # Version-based data consistency
 │   ├── TimeoutDelay.java     # Timeout management
-│   ├── OperationDelays.java  # Operation timing configuration
-│   └── FzfIntegration.java   # Command-line fuzzy search
+│   └── OperationDelays.java  # Operation timing configuration 
 ├── Messages.java             # Actor message definitions
 ├── DataStoreManager.java     # Global configuration manager
 └── Main.java                # Basic demo application
@@ -38,21 +37,22 @@ src/main/java/it/unitn/ds1/
 
 ### Prerequisites
 
-- Java 11 or higher
-- Gradle 6.0+
+- Java 17 or higher
+- Gradle 9.0 was used
 
-### Building the Project
+### Running the System
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd distributed-storage-system
-
 # Build the project
 gradle build
 
-# Run the interactive test suite
+# Run interactive testing framework (recommended)
 gradle run --console=plain
+
+# Alternative: Run specific main classes by editing build.gradle:
+# - it.unitn.ds1.test.InteractiveTest (default - interactive testing)
+# - it.unitn.ds1.test.LargeScaleTest (automated large-scale tests)  
+# - it.unitn.ds1.Main (basic demo scenarios)
 ```
 
 ### Running Tests
@@ -63,18 +63,18 @@ gradle run
 
 # Run large-scale automated tests
 # Edit build.gradle to uncomment: mainClassName = "it.unitn.ds1.test.LargeScaleTest"
-gardle run
+gradle run
 
 # Run basic demo
 # Edit build.gradle to uncomment: mainClassName = "it.unitn.ds1.Main"
-gardle run
+gradle run
 ```
 
 ## 🎯 Key Features
 
 ### 1. Distributed Key-Value Storage
 
-- **Hash-based Distribution**: Keys are distributed across nodes using consistent hashing
+- **N Replication**: Keys are distributed across N nodes using consistent hashing
 - **Versioned Values**: Each value is versioned to handle concurrent updates
 - **Atomic Operations**: Read and write operations are atomic at the key level
 
@@ -90,7 +90,7 @@ Default configuration: N=3, W=2, R=2 (strong consistency)
 
 ### 3. Fault Tolerance
 
-- **Node Crashes**: System continues operating when nodes fail
+- **Node Crashes**: System continues operating when nodes fail (at least one has to remain alive)
 - **Network Partitions**: Handles network splits gracefully
 - **Timeout Handling**: Client and node timeouts for unresponsive operations
 - **Recovery**: Crashed nodes can rejoin and synchronize data
@@ -103,76 +103,79 @@ Default configuration: N=3, W=2, R=2 (strong consistency)
 
 ## 🧪 Interactive Testing Framework
 
-The system includes a comprehensive interactive testing framework with fuzzy command search:
+The system includes a comprehensive interactive testing framework accessible via [`InteractiveTest.java`](src/main/java/it/unitn/ds1/test/InteractiveTest.java):
 
-### Available Test Commands
+### Available Commands
 
 ```bash
-# System Management
-init [N] [W] [R]          # Initialize system with N nodes, W write quorum, R read quorum
-add-node [count]          # Add new storage nodes
-add-client [count]        # Add new client actors
-reset                     # Reset entire system
-quit                      # Exit the system
+# System Information
+help, h                  # Show help message
+status, s                # Show system status  
+nodes                    # List all nodes and their states
+clients                  # List all clients
+data                     # Show data distribution
 
 # Basic Operations
-write <key> <value> [node_id]   # Write key-value pair
-read <key> [node_id]            # Read value for key
-list-nodes                      # Show all active nodes
-list-clients                    # Show all clients
+get <key> [nodeId] [clientId]         # Read value for key
+put <key> <value> [nodeId] [clientId] # Store key-value pair
+
+# Node Management  
+addnode [nodeId]         # Add a new node to the system
+removenode <nodeId>      # Remove a node from the system
+crash <nodeId>           # Crash a specific node
+recover <nodeId> [peerNodeId] # Recover a crashed node
+join <nodeId> <peerNodeId>    # Join a node via bootstrap peer
+leave <nodeId>           # Node graceful departure
+
+# Client Management
+addclient                # Add a new client actor
+removeclient <clientId>  # Remove a client actor
 
 # Testing Scenarios
-test basic                # Test basic CRUD operations
-test quorum              # Test quorum behavior
-test concurrency         # Test concurrent operations
-test consistency         # Test data consistency
-test membership          # Test join/leave operations
-test partition           # Test network partition scenarios
-test recovery            # Test crash recovery
-test edge-cases          # Test edge cases and error scenarios
-test timeout             # Test client timeout scenarios
+test basic               # Test basic CRUD operations
+test quorum             # Test quorum behavior with failures
+test concurrency        # Test concurrent operations
+test consistency        # Test data consistency across nodes
+test membership         # Test join/leave operations
+test partition          # Test network partition scenarios
+test recovery           # Test crash recovery scenarios
+test edge-cases         # Test edge cases and error conditions
+test timeout            # Test client timeout scenarios
 
-# Advanced Operations
-crash <node_id>          # Crash a specific node
-recover <node_id>        # Recover a crashed node
-join <node_id>           # Join a new node to network
-leave <node_id>          # Remove node from network
+# Performance Testing
 benchmark <operations>   # Run performance benchmark
-stress <duration>        # Run stress test
+stress <duration>        # Run stress test for specified seconds
 
-# Debugging
-debug <node_id>          # Print node's data store
-debug-all                # Print all nodes' data stores
-log-level <level>        # Set logging level (DEBUG, INFO, WARN, ERROR)
+# System Control
+reset                    # Reset entire system to initial state
+clear                    # Clear screen
+quit, exit, q           # Exit the system
 ```
 
-### Fuzzy Command Search
+### System Initialization
 
-The interactive framework includes `fzf` integration for enhanced command discovery:
-
-```bash
-# Type 'fzf' or 'help' to open fuzzy command search
-fzf
-
-# Search commands by typing partial names or descriptions
-# Example: typing "test" shows all testing commands
-# Example: typing "crash" shows crash-related commands
-```
+The system automatically initializes with default configuration (N=3, W=2, R=2) when started. The configuration is managed by [`DataStoreManager`](src/main/java/it/unitn/ds1/DataStoreManager.java) and cannot be changed at runtime.
 
 ## 📊 System Parameters
 
 ### Default Configuration
 
 ```java
-// DataStoreManager defaults
+// DataStoreManager defaults (from DataStoreManager.getInstance())
 N = 3  // Number of replicas
 W = 2  // Write quorum size  
 R = 2  // Read quorum size
+```
 
-// Timeouts (configurable via TimeoutDelay)
-CLIENT_OPERATION_TIMEOUT = 3000ms
-NODE_OPERATION_TIMEOUT = 2000ms
-MEMBERSHIP_TIMEOUT = 1500ms
+### Timeout Configuration
+
+Timeouts are compile-time constants defined in [`TimeoutDelay.java`](src/main/java/it/unitn/ds1/utils/TimeoutDelay.java) and [`OperationDelays.java`](src/main/java/it/unitn/ds1/utils/OperationDelays.java):
+
+```java
+// From TimeoutDelay.java - these are static final constants
+CLIENT_GET_DELAY = BASE_DELAY * 4.5      // ~2025ms
+CLIENT_UPDATE_DELAY = BASE_DELAY * 4.75  // ~2137ms  
+JOIN_DELAY = BASE_DELAY * 6.2            // ~2790ms
 ```
 
 ### Logging Configuration
@@ -249,10 +252,10 @@ DataStoreManager.initialize(N, W, R);
 
    ```bash
    # Check node status
-   debug-all
+   > status
    
    # Verify network connectivity
-   list-nodes
+   > nodes
    ```
 
 2. **Timeout Errors**
@@ -272,8 +275,7 @@ DataStoreManager.initialize(N, W, R);
 ## 📚 References
 
 - **Akka Documentation**: [https://akka.io/docs/](https://akka.io/docs/)
-- **Distributed Systems Concepts**: Consistency, Availability, Partition tolerance (CAP theorem)
-- **Dynamo Paper**: Amazon's Dynamo architecture principles
+- **Distributed Systems Concepts**: Consistency, Availability, Replication, Fault Tolerance, Sequential Consistency, Quorum, Concurrency.
 
 ## 🤝 Contributing
 
