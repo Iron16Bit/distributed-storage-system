@@ -111,6 +111,7 @@ public class StorageNode extends AbstractActor {
         }
     }
 
+
     // ===== CONSTRUCTOR =====
     
     public StorageNode(int id) {
@@ -189,6 +190,15 @@ public class StorageNode extends AbstractActor {
             ref, msg,
             getContext().system().dispatcher(), ref
         );
+    }
+
+    private Integer getNodeId(ActorRef node) {
+        for (Map.Entry<Integer, ActorRef> entry : this.nodeRegistry.entrySet()) {
+            if (entry.getValue().equals(node)) {
+                return entry.getKey();
+            }
+        }
+        return -1; // Unknown node
     }
 
     // ===== LOCATE N REPLICAS =====
@@ -465,11 +475,33 @@ public class StorageNode extends AbstractActor {
      * Requests missing data from neighbors and cleans up obsolete entries.
      */
     private void handleRecoveryUpdate() {
-        ActorRef neighbor = findNeighborForRecovery();
-        if (neighbor != null) {
-            logger.info("Node {} - Recovery: requesting data items from neighbor", this.id);
-            scheduleMessage(neighbor, getSelf(), new Messages.RequestDataItems(this.id, OperationType.RECOVERY));
+        ActorRef predecessor = findNeighborForRecovery();
+        ActorRef successor = findNeighborForJoin();
+        
+        // Request data from neighbors (best effort - no tracking required)
+        if (predecessor != null) {
+            logger.info("Node {} - Recovery: requesting data items from predecessor {}", this.id, getNodeId(predecessor));
+            scheduleMessage(predecessor, getSelf(), new Messages.RequestDataItems(this.id, OperationType.RECOVERY));
         }
+        
+        if (successor != null && !successor.equals(predecessor)) {
+            logger.info("Node {} - Recovery: requesting data items from successor {}", this.id, getNodeId(successor));
+            scheduleMessage(successor, getSelf(), new Messages.RequestDataItems(this.id, OperationType.RECOVERY));
+        }
+        
+        // Register immediately - responses will be processed as they arrive
+        if (!this.nodeRegistry.containsKey(this.id)) {
+            this.nodeRegistry.put(this.id, getSelf());
+            
+            // Announce presence to other nodes
+            for (ActorRef ref : nodeRegistry.values()) {
+                if (ref != getSelf()) {
+                    scheduleMessage(ref, getSelf(), new Messages.Announce(this.id));
+                }
+            }
+        }
+        
+        logger.info("Node {} - Recovery: rejoined cluster, waiting for data responses", this.id);
         cleanupObsoleteData();
     }
 
@@ -481,15 +513,11 @@ public class StorageNode extends AbstractActor {
         }
     }
 
-    /**
-     * Finds the predecessor node in the ring for recovery purposes.
-     * Uses the node with highest ID less than this node's ID.
-     */
-    private ActorRef findNeighborForRecovery() {
+        private ActorRef findNeighborForRecovery() {
         SortedMap<Integer, ActorRef> lowerNodes = this.nodeRegistry.headMap(this.id);
-        return lowerNodes.isEmpty() 
-            ? this.nodeRegistry.lastEntry().getValue()
-            : lowerNodes.lastEntry().getValue();
+        return lowerNodes.isEmpty()
+            ? this.nodeRegistry.lastEntry().getValue()  // Wrap around to highest ID
+            : lowerNodes.lastEntry().getValue();        // Get highest ID less than this.id
     }
 
     /**
@@ -497,10 +525,10 @@ public class StorageNode extends AbstractActor {
      * Uses the node with lowest ID greater than this node's ID.
      */
     private ActorRef findNeighborForJoin() {
-        SortedMap<Integer, ActorRef> higherNodes = this.nodeRegistry.tailMap(this.id);
+        SortedMap<Integer, ActorRef> higherNodes = this.nodeRegistry.tailMap(this.id + 1);
         return higherNodes.isEmpty()
-            ? this.nodeRegistry.firstEntry().getValue()
-            : higherNodes.firstEntry().getValue();
+            ? this.nodeRegistry.firstEntry().getValue()   // Wrap around to lowest ID
+            : higherNodes.firstEntry().getValue();        // Get lowest ID greater than this.id
     }
 
     /**
@@ -565,22 +593,48 @@ public class StorageNode extends AbstractActor {
     
     private void onRequestDataItems(Messages.RequestDataItems msg) {
         logger.debug("Node {} - Received data items request from node {}", this.id, msg.askingID);
-        Map<Integer, VersionedValue> requestedDataItems = new TreeMap<>(this.dataStore);
+        SortedMap<Integer, VersionedValue> requestedDataItems = new TreeMap<>(this.dataStore);
+        logger.debug("Node {} - Items: {}, PersonalDataStore {}", this.id, requestedDataItems, this.dataStore);
         scheduleMessage(sender(), getSelf(), new Messages.DataItemsResponse(requestedDataItems, msg.operationType));
     }
 
     private void onDataItemsResponse(Messages.DataItemsResponse msg) {
+        if (msg.operationType == OperationType.RECOVERY) {
+            // Process any recovery data that arrives (no tracking needed)
+            int itemsReceived = 0;
+            for (Integer key : msg.dataItems.keySet()) {
+                VersionedValue value = msg.dataItems.get(key);
+                List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
+                
+                if (nNodes.contains(getSelf())) {
+                    VersionedValue existingValue = this.dataStore.get(key);
+                    
+                    // Update if we don't have the key or received version is newer
+                    if (existingValue == null || existingValue.getVersion() < value.getVersion()) {
+                        this.dataStore.put(key, value);
+                        itemsReceived++;
+                        logger.debug("Node {} - Recovery: updated key {} with value {} (version {})", 
+                                this.id, key, value.getValue(), value.getVersion());
+                    }
+                }
+            }
+            
+            if (itemsReceived > 0) {
+                logger.info("Node {} - Recovery: received {} data items from neighbor", 
+                        this.id, itemsReceived);
+            }
+            return;
+        }
+        
+        // Existing JOIN logic
         SortedMap<Integer, ActorRef> futureMap = new TreeMap<>(this.nodeRegistry);
         futureMap.put(this.id, getSelf());
 
-        boolean hasAskedItems = false;
+        logger.debug("Node {} - Received data items response", this.id);
 
         for (Integer key : msg.dataItems.keySet()) {
             if (msg.operationType == OperationType.JOIN && getNextNNodes(key, futureMap).contains(getSelf())) {
                 handleJoinDataItem(key, futureMap);
-                hasAskedItems = true;
-            } else {
-                handleRecoveryDataItem(key, msg.dataItems.get(key));
             }
         }
 
@@ -588,12 +642,10 @@ public class StorageNode extends AbstractActor {
         // we did not add it to its nodeRegistry.
         if (msg.operationType == OperationType.JOIN) {
             this.nodeRegistry.put(this.id, getSelf());
-            if (!hasAskedItems) {
-                for (ActorRef ref : nodeRegistry.values()) {
-                    if (ref != getSelf()) {
-                        scheduleMessage(ref, getSelf(), new Messages.Announce(this.id));
-                    } 
-                }
+            for (ActorRef ref : nodeRegistry.values()) {
+                if (ref != getSelf()) {
+                    scheduleMessage(ref, getSelf(), new Messages.Announce(this.id));
+                } 
             }
         }
     }
@@ -615,14 +667,6 @@ public class StorageNode extends AbstractActor {
         List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
         for (ActorRef ref : nNodes) {
             scheduleMessage(ref, getSelf(), new Messages.ReplicaGet(key, operationId, OperationType.JOIN));
-        }
-    }
-
-    private void handleRecoveryDataItem(Integer key, VersionedValue value) {
-        List<ActorRef> nNodes = getNextNNodes(key, this.nodeRegistry);
-        if (nNodes.contains(getSelf()) && !this.dataStore.containsKey(key)) {
-            logger.info("Node {} - Recovery: added key {} with value {}", this.id, key, value);
-            this.dataStore.put(key, value);
         }
     }
 
