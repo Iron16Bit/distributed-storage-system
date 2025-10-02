@@ -2,6 +2,12 @@
 
 A p2p key-value storage system implementation using the Actor model with Akka. This system provides distributed data storage with configurable replication, consistency guarantees, and failure handling capabilities.
 
+The Repo includes the project description (instructions) and our final report.
+
+### Premises
+
+We decided to adopt a 4-eyes, 2-hands approach for this project rathen than a 4-hands approach. This means that we didn't work in parallel on different parts of the code, but always worked together on the same piece of code. On one hand this slowed us down, but on the other hand we've been able to produce much better code. This approach allowed the person that wasn't actively typing to think about the flaws and notice the other person's errors. As a result, the work went smoothly and we rarely found problems in our solution.
+
 ## 🏗️ System Architecture
 
 The system implements a distributed storage system with the following key features:
