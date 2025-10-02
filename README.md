@@ -37,7 +37,7 @@ src/main/java/it/unitn/ds1/
 
 ### Prerequisites
 
-- Java 17 or higher
+- Java 21 or higher
 - Gradle 9.0 was used
 
 ### Running the System
